@@ -489,6 +489,7 @@ describe("validateEvidence", () => {
     );
 
     expect(result.status).toBe("invalid");
+    expect(result.checks.excerptHash).toBe("failed");
     expect(result.issues[0]?.code).toBe("excerpt_hash_mismatch");
   });
 
