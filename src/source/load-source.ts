@@ -7,6 +7,7 @@ import {
   SourceManifestSchema,
   type SourceManifest,
 } from "../contracts/v1.js";
+import { calculateManifestHashes } from "./manifest-hash.js";
 
 export interface SourceFile {
   readonly path: string;
@@ -39,16 +40,6 @@ const DEFAULT_LIMITS = {
   maxFileBytes: 1024 * 1024,
   maxTotalBytes: 5 * 1024 * 1024,
 };
-
-const FILE_MANIFEST_DOMAIN = "SentinelReview:file-manifest:v1\0";
-const SOURCE_MANIFEST_DOMAIN = "SentinelReview:source:v1\0";
-
-function hashWithDomain(domain: string, value: string): string {
-  return createHash("sha256")
-    .update(domain, "utf8")
-    .update(value, "utf8")
-    .digest("hex");
-}
 
 function countPhysicalLines(content: string): number {
   if (content.length === 0) {
@@ -213,7 +204,10 @@ export async function loadSource(
 
         let content: string;
         try {
-          content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          content = new TextDecoder("utf-8", {
+            fatal: true,
+            ignoreBOM: true,
+          }).decode(bytes);
         } catch (error) {
           throw new Error(`Source file is not valid UTF-8: ${canonicalPath}`, {
             cause: error,
@@ -253,14 +247,8 @@ export async function loadSource(
   );
   files.sort((left, right) => compareCanonicalPaths(left.path, right.path));
 
-  const fileManifestHash = hashWithDomain(
-    FILE_MANIFEST_DOMAIN,
-    JSON.stringify(manifestEntries),
-  );
-  const sourceHash = hashWithDomain(
-    SOURCE_MANIFEST_DOMAIN,
-    JSON.stringify({ schemaVersion, fileManifestHash }),
-  );
+  const { fileManifestHash, sourceHash } =
+    calculateManifestHashes(schemaVersion, manifestEntries);
   const parsedManifest = SourceManifestSchema.parse({
     schemaVersion,
     files: manifestEntries,

@@ -185,6 +185,26 @@ describe("loadSource", () => {
     expect(result.manifest.sourceHash).toBe(expectedSourceHash);
   });
 
+  it("preserves an initial UTF-8 BOM and hashes the original bytes", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    const bytes = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from("fn café() {}\n", "utf8"),
+    ]);
+    await writeSourceFile(sourceDirectory, "lib.rs", bytes);
+
+    const result = await loadSource(sourceDirectory);
+    const file = result.files[0];
+    const manifestFile = result.manifest.files[0];
+
+    expect(file?.content).toBe("\uFEFFfn café() {}\n");
+    expect(Buffer.from(file!.content, "utf8").equals(bytes)).toBe(true);
+    expect(manifestFile?.byteLength).toBe(bytes.byteLength);
+    expect(manifestFile?.sha256).toBe(
+      createHash("sha256").update(bytes).digest("hex"),
+    );
+  });
+
   it("produces the same manifest hashes regardless of file creation order", async () => {
     const firstDirectory = path.join(temporaryDirectory, "first");
     const secondDirectory = path.join(temporaryDirectory, "second");
@@ -210,6 +230,37 @@ describe("loadSource", () => {
       "nested/b.rs",
       "z.rs",
     ]);
+
+    const expectedEntries = ["A.rs", "a.rs", "nested/b.rs", "z.rs"].map(
+      (fileName) => {
+        const content = `${fileName}\n`;
+        const bytes = Buffer.from(content, "utf8");
+
+        return {
+          path: fileName,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          byteLength: bytes.byteLength,
+          lineCount: 1,
+        };
+      },
+    );
+    const expectedFileManifestHash = createHash("sha256")
+      .update("SentinelReview:file-manifest:v1\0", "utf8")
+      .update(JSON.stringify(expectedEntries), "utf8")
+      .digest("hex");
+    const expectedSourceHash = createHash("sha256")
+      .update("SentinelReview:source:v1\0", "utf8")
+      .update(
+        JSON.stringify({
+          schemaVersion: "1.0.0",
+          fileManifestHash: expectedFileManifestHash,
+        }),
+        "utf8",
+      )
+      .digest("hex");
+
+    expect(first.manifest.fileManifestHash).toBe(expectedFileManifestHash);
+    expect(first.manifest.sourceHash).toBe(expectedSourceHash);
   });
 
   it("rejects source files containing invalid UTF-8", async () => {
