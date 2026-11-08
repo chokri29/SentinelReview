@@ -19,6 +19,7 @@
   "dependencies": {
     "@clerk/express": "^2.1.87",
     "@clerk/react": "^6.18.5",
+    "@lezer/rust": "1.0.3",
     "zod": "^4.6.7"
   }
 }

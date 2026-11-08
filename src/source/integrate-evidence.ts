@@ -5,10 +5,19 @@ import {
   type EvidenceValidationResult,
 } from "./validate-evidence.js";
 
+type ImmutableFinding = Readonly<
+  Omit<Finding, "evidenceRefs" | "limitations">
+> & {
+  readonly evidenceRefs: readonly Readonly<Finding["evidenceRefs"][number]>[];
+  readonly limitations: readonly string[];
+};
+
+type FindingInput = ImmutableFinding;
+
 export type EvidenceIntegrationStatus = "complete" | "partial" | "invalid";
 
 export interface EvidenceIntegrationEntry {
-  readonly evidence: Evidence;
+  readonly evidence: Readonly<Evidence>;
   readonly validation: EvidenceValidationResult;
 }
 
@@ -18,13 +27,13 @@ export type FindingEvidenceReferenceStatus =
   | "ambiguous";
 
 export interface FindingEvidenceReferenceResult {
-  readonly evidenceRef: Finding["evidenceRefs"][number];
+  readonly evidenceRef: Readonly<Finding["evidenceRefs"][number]>;
   readonly status: FindingEvidenceReferenceStatus;
   readonly evidenceEntry?: EvidenceIntegrationEntry;
 }
 
 export interface FindingReferenceResult {
-  readonly finding: Finding;
+  readonly finding: ImmutableFinding;
   readonly evidenceRefs: readonly FindingEvidenceReferenceResult[];
 }
 
@@ -71,18 +80,35 @@ function createIssue(
   });
 }
 
+function copyEvidence(evidence: Evidence): Readonly<Evidence> {
+  return Object.freeze({ ...evidence });
+}
+
+function copyFinding(finding: FindingInput): ImmutableFinding {
+  return Object.freeze({
+    ...finding,
+    evidenceRefs: Object.freeze(
+      finding.evidenceRefs.map((evidenceRef) =>
+        Object.freeze({ ...evidenceRef }),
+      ),
+    ),
+    limitations: Object.freeze([...finding.limitations]),
+  });
+}
+
 export function integrateEvidence(
   evidenceRecords: readonly Evidence[],
-  findings: readonly Finding[],
+  findings: readonly FindingInput[],
   snapshot?: SourceLoadResult,
 ): EvidenceIntegrationResult {
   const issues: EvidenceIntegrationIssue[] = [];
-  const evidenceEntries = evidenceRecords.map((evidence) =>
-    Object.freeze({
-      evidence,
-      validation: validateEvidence(evidence, snapshot),
-    }),
-  );
+  const evidenceEntries = evidenceRecords.map((evidence) => {
+    const copiedEvidence = copyEvidence(evidence);
+    return Object.freeze({
+      evidence: copiedEvidence,
+      validation: validateEvidence(copiedEvidence, snapshot),
+    });
+  });
   const mutableEvidenceById: Record<string, EvidenceIntegrationEntry[]> =
     Object.create(null);
 
@@ -115,7 +141,8 @@ export function integrateEvidence(
     evidenceById[evidenceId] = Object.freeze(mutableEvidenceById[evidenceId]!);
   }
 
-  const findingResults = findings.map((finding) => {
+  const findingResults = findings.map((inputFinding) => {
+    const finding = copyFinding(inputFinding);
     const evidenceRefs = finding.evidenceRefs.map((evidenceRef) => {
       const matchingEntries = evidenceById[evidenceRef.evidenceId];
 

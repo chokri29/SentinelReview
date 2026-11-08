@@ -230,7 +230,8 @@ describe("integrateEvidence", () => {
       snapshot,
     );
 
-    expect(result.findings[0]?.finding).toBe(finding);
+    expect(result.findings[0]?.finding).not.toBe(finding);
+    expect(result.findings[0]?.finding).toEqual(finding);
     expect(result.findings[0]?.finding.origin).toBe("ai_hypothesis");
     expect(result.findings[0]?.finding.severity).toBe("critical");
   });
@@ -295,14 +296,37 @@ describe("integrateEvidence", () => {
     expect(
       Object.isFrozen(result.evidenceEntries[0]?.validation.issues[0]),
     ).toBe(true);
+    expect(Object.isFrozen(result.evidenceEntries[0]?.evidence)).toBe(true);
     expect(Object.isFrozen(result.evidenceById)).toBe(true);
     expect(Object.isFrozen(result.evidenceById["evidence-1"])).toBe(true);
     expect(Object.isFrozen(result.findings)).toBe(true);
     expect(Object.isFrozen(result.findings[0])).toBe(true);
+    expect(Object.isFrozen(result.findings[0]?.finding)).toBe(true);
+    expect(
+      Object.isFrozen(result.findings[0]?.finding.evidenceRefs),
+    ).toBe(true);
     expect(Object.isFrozen(result.findings[0]?.evidenceRefs)).toBe(true);
     expect(Object.isFrozen(result.findings[0]?.evidenceRefs[0])).toBe(true);
+    expect(
+      Object.isFrozen(result.findings[0]?.finding.evidenceRefs[0]),
+    ).toBe(true);
     expect(Object.isFrozen(result.issues)).toBe(true);
     expect(Object.isFrozen(result.issues[0])).toBe(true);
+    expect(result.evidenceEntries[0]?.evidence).not.toBe(evidence);
+    expect(result.findings[0]?.finding).not.toBe(finding);
+    expect(
+      Reflect.set(result.evidenceEntries[0]!.evidence, "path", "changed.rs"),
+    ).toBe(false);
+    expect(
+      Reflect.set(result.findings[0]!.finding, "title", "changed"),
+    ).toBe(false);
+    expect(
+      Reflect.set(
+        result.findings[0]!.finding.evidenceRefs[0]!,
+        "evidenceId",
+        "changed",
+      ),
+    ).toBe(false);
     expect(Object.isFrozen(evidence)).toBe(false);
     expect(Object.isFrozen(finding)).toBe(false);
   });
