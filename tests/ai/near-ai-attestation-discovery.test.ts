@@ -9,6 +9,7 @@ import {
   createDiscoveryClientOptions,
   executeNearAiAttestationDiscovery,
   NEAR_AI_DISCOVERY_MODEL_ID,
+  runNearAiAttestationDiscoveryCli,
 } from "../../scripts/near-ai-attestation-discovery.js";
 
 const successfulModelAttestation = {
@@ -27,6 +28,25 @@ const successfulResult = {
   gateway: { tcbStatus: "UpToDate" as const },
   models: [successfulModelAttestation],
 };
+
+function httpStatusFailureWithResource(resource: string | undefined): ApiError {
+  const error = new ApiError({
+    code: "api.http_status",
+    details: { resource: "model_attestation", status: 500 },
+    retryable: true,
+  });
+  Object.defineProperty(error, "failure", {
+    value: {
+      code: "api.http_status",
+      details:
+        resource === undefined
+          ? { status: 500 }
+          : { resource, status: 500 },
+      retryable: true,
+    },
+  });
+  return error;
+}
 
 describe("NEAR AI attestation discovery", () => {
   it("uses strict attestation settings without deployment callbacks", () => {
@@ -153,13 +173,46 @@ describe("NEAR AI attestation discovery", () => {
     expect(errors.join("")).not.toContain(transportFailure.message);
   });
 
-  it("reports the HTTP status and attestation stage without exposing response details", async () => {
+  it.each([
+    ["gateway_attestation", "gateway attestation retrieval", 500],
+    ["model_metadata", "model metadata retrieval", 503],
+    ["model_attestation", "model attestation retrieval", 500],
+    ["model_attestation", "model attestation retrieval", 503],
+  ] as const)(
+    "classifies resource %s as %s for HTTP %s",
+    async (resource, stage, status) => {
+      const errors: string[] = [];
+      const responseFailure = new ApiError({
+        code: "api.http_status",
+        details: { resource, status },
+        retryable: true,
+      });
+
+      const succeeded = await executeNearAiAttestationDiscovery(
+        "test-only-not-a-real-key",
+        () => {},
+        (text) => errors.push(text),
+        () => ({
+          verify: async () => {
+            throw responseFailure;
+          },
+        }),
+      );
+
+      expect(succeeded).toBe(false);
+      expect(errors.join("")).toContain(
+        `during ${stage}: attestation service returned HTTP status ${status}`,
+      );
+      expect(errors.join("")).not.toContain(responseFailure.message);
+    },
+  );
+
+  it.each([
+    ["unknown resource", "untrusted-resource-name"],
+    ["absent resource", undefined],
+  ])("falls back safely for an %s", async (_label, resource) => {
     const errors: string[] = [];
-    const responseFailure = new ApiError({
-      code: "api.http_status",
-      details: { resource: "model_attestation", status: 503 },
-      retryable: true,
-    });
+    const responseFailure = httpStatusFailureWithResource(resource);
 
     const succeeded = await executeNearAiAttestationDiscovery(
       "test-only-not-a-real-key",
@@ -174,7 +227,77 @@ describe("NEAR AI attestation discovery", () => {
 
     expect(succeeded).toBe(false);
     expect(errors.join("")).toContain(
-      "during model attestation retrieval: attestation service returned HTTP status 503",
+      "during attestation discovery: attestation service returned HTTP status 500",
+    );
+    expect(errors.join("")).not.toContain("untrusted-resource-name");
+    expect(errors.join("")).not.toContain(responseFailure.message);
+  });
+
+  it("classifies invalid SDK responses without exposing untrusted details", async () => {
+    const errors: string[] = [];
+    const responseFailure = new ApiError(
+      {
+        code: "api.invalid_response",
+        details: {
+          path: "Authorization header",
+          expected: "valid response",
+          actual: "private-token and raw-response-body",
+        },
+      },
+      { cause: new Error("source code and request headers") },
+    );
+
+    const succeeded = await executeNearAiAttestationDiscovery(
+      "test-only-not-a-real-key",
+      () => {},
+      (text) => errors.push(text),
+      () => ({
+        verify: async () => {
+          throw responseFailure;
+        },
+      }),
+    );
+
+    expect(succeeded).toBe(false);
+    expect(errors.join("")).toContain(
+      "during attestation response validation: attestation service returned an invalid response",
+    );
+    for (const sensitiveValue of [
+      responseFailure.message,
+      "Authorization header",
+      "private-token",
+      "raw-response-body",
+      "source code",
+      "request headers",
+    ]) {
+      expect(errors.join("")).not.toContain(sensitiveValue);
+    }
+  });
+
+  it("returns a nonzero CLI exit code for a sanitized discovery failure", async () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const responseFailure = new ApiError({
+      code: "api.http_status",
+      details: { resource: "model_attestation", status: 500 },
+      retryable: true,
+    });
+
+    const exitCode = await runNearAiAttestationDiscoveryCli(
+      "test-only-not-a-real-key",
+      (text) => output.push(text),
+      (text) => errors.push(text),
+      () => ({
+        verify: async () => {
+          throw responseFailure;
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.join("")).toContain(
+      "during model attestation retrieval: attestation service returned HTTP status 500",
     );
     expect(errors.join("")).not.toContain(responseFailure.message);
   });

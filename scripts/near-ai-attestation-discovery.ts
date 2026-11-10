@@ -58,6 +58,7 @@ type FailureStage =
   | "SDK initialization"
   | "network/TLS connectivity"
   | "gateway attestation retrieval"
+  | "model metadata retrieval"
   | "model attestation retrieval"
   | "attestation response validation"
   | "attestation verification"
@@ -96,14 +97,17 @@ function isNonEmptyString(value: string | undefined): value is string {
   return value !== undefined && value.trim().length > 0;
 }
 
-function stageForApiResource(resource: string): FailureStage {
-  if (resource === "gateway_attestation") {
-    return "gateway attestation retrieval";
+function stageForApiResource(resource: unknown): FailureStage {
+  switch (resource) {
+    case "gateway_attestation":
+      return "gateway attestation retrieval";
+    case "model_metadata":
+      return "model metadata retrieval";
+    case "model_attestation":
+      return "model attestation retrieval";
+    default:
+      return "attestation discovery";
   }
-  if (resource === "model_metadata" || resource === "model_attestation") {
-    return "model attestation retrieval";
-  }
-  return "attestation discovery";
 }
 
 function classifyApiError(error: ApiError): FailureDiagnostic {
@@ -124,6 +128,12 @@ function classifyApiError(error: ApiError): FailureDiagnostic {
     return {
       stage: stageForApiResource(failure.details.resource),
       classification: "attestation service returned invalid JSON",
+    };
+  }
+  if (failure.code === "api.invalid_response") {
+    return {
+      stage: "attestation response validation",
+      classification: "attestation service returned an invalid response",
     };
   }
   if (failure.code === "api.nonce_mismatch") {
@@ -293,14 +303,29 @@ export async function executeNearAiAttestationDiscovery(
   return true;
 }
 
-async function main(): Promise<void> {
+export async function runNearAiAttestationDiscoveryCli(
+  apiKey: string | undefined,
+  writeOutput: (output: string) => void,
+  writeError: (message: string) => void,
+  clientFactory: DiscoveryClientFactory = createDiscoveryClient,
+): Promise<number> {
   const succeeded = await executeNearAiAttestationDiscovery(
+    apiKey,
+    writeOutput,
+    writeError,
+    clientFactory,
+  );
+  return succeeded ? 0 : 1;
+}
+
+async function main(): Promise<void> {
+  const exitCode = await runNearAiAttestationDiscoveryCli(
     process.env.NEARAI_API_KEY,
     (output) => process.stdout.write(output),
     (message) => process.stderr.write(message),
   );
-  if (!succeeded) {
-    process.exitCode = 1;
+  if (exitCode !== 0) {
+    process.exitCode = exitCode;
   }
 }
 
