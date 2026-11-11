@@ -17,14 +17,11 @@ SentinelReview is a privacy-focused security review foundation for NEAR Rust sma
 - [x] NEAR AI adapter with strict candidate-response validation, source-grounded evidence handling, and separation of AI hypotheses from deterministic findings.
 - [x] SDK-backed attestation/response-verification handling and a controlled synthetic canary implementation with focused tests.
 - [x] Discovery diagnostics for inspecting NEAR AI gateway/model attestation and deployment measurements.
+- [x] Bounded Docker Compose image inventory in the NEAR AI discovery report: limits the app configuration to 1 MiB and the service count to 200, parses YAML with duplicate-key/error checks, validates image references, and reports whether each reference is digest-pinned, tag-only, or untagged.
 
-The repository includes focused tests for the implemented modules. Historical test runs were performed during earlier milestones; rerun the full suite and typecheck against the current checkout before treating the latest combined state as verified.
+The inventory distinguishes `parsed`, `malformed`, and `unsupported` input. Unsupported or malformed input produces no partial image list. The inventory is diagnostic only: parsing a Compose document does not prove that an image was deployed, that runtime measurements match it, or that an operator or NEAR independently approved the deployment.
 
-### Current work in progress
-
-- [ ] Compose deployment-image inventory parsing in the NEAR AI discovery report. Local work has started, including bounded input/service/image limits, YAML parsing, sanitized image-reference output, and malformed/unsupported input tests. This work is **not yet present in the current `main` branch** and must not be treated as completed or verified.
-- [ ] Review the complete image-reference parser and its edge cases before merging that work.
-- [ ] Re-run `npm run typecheck` and `npm test` after the current changes are finished.
+**Verification on the merged `main` checkout (11 November 2026):** `npm test` passed (9 test files, 247 tests); `npm run typecheck` and `git diff --check` also passed.
 
 ### Remaining roadmap
 
