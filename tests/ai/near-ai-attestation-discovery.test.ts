@@ -17,6 +17,7 @@ const successfulModelAttestation = {
   gpuEvidence: "verified" as const,
   deploymentProvenance: "not_checked" as const,
   deployment: {
+    appCompose: JSON.stringify({ docker_compose_file: "services: {}" }),
     runtimeMeasurements: {
       composeHash: "compose-measurement",
       osImageHash: "os-measurement",
@@ -91,6 +92,7 @@ describe("NEAR AI attestation discovery", () => {
           measurementApproval: "not_approved",
           composeHash: "compose-measurement",
           osImageHash: "os-measurement",
+          deploymentImageInventory: { status: "parsed", images: [] },
         },
       ],
     });
@@ -370,8 +372,336 @@ describe("NEAR AI attestation discovery", () => {
           measurementApproval: "not_approved",
           composeHash: "compose-measurement",
           osImageHash: "os-measurement",
+          deploymentImageInventory: { status: "parsed", images: [] },
         },
       ],
+    });
+  });
+
+  it("extracts a validated SHA-256 digest without promoting provenance status", () => {
+    const report = buildDiscoveryReportWithAppCompose(
+      JSON.stringify({
+        docker_compose_file:
+          "services:\n  model:\n    image: ghcr.io/nearai/model@sha256:" +
+          "a".repeat(64),
+      }),
+    );
+
+    expect(report.modelAttestations[0]).toMatchObject({
+      deploymentProvenance: "not_checked",
+      measurementApproval: "not_approved",
+      deploymentImageInventory: {
+        status: "parsed",
+        images: [
+          {
+            image: "ghcr.io/nearai/model",
+            digest: `sha256:${"a".repeat(64)}`,
+            pinnedToDigest: true,
+            referenceStatus: "digest_pinned",
+          },
+        ],
+      },
+    });
+  });
+
+  it("reports tag-only and untagged references without inventing digests", () => {
+    const report = buildDiscoveryReportWithAppCompose(
+      JSON.stringify({
+        docker_compose_file:
+          "services:\n  tagged:\n    image: nearai/model:release-1\n  plain:\n    image: nearai/worker\n",
+      }),
+    );
+
+    expect(report.modelAttestations[0]?.deploymentImageInventory).toEqual({
+      status: "parsed",
+      images: [
+        {
+          image: "nearai/model",
+          digest: null,
+          pinnedToDigest: false,
+          referenceStatus: "tag_only",
+        },
+        {
+          image: "nearai/worker",
+          digest: null,
+          pinnedToDigest: false,
+          referenceStatus: "untagged",
+        },
+      ],
+    });
+  });
+
+  it("accepts services without image references and returns an empty inventory", () => {
+    const report = buildDiscoveryReportWithAppCompose(
+      JSON.stringify({
+        docker_compose_file:
+          "services:\n  builder:\n    command: build\n  optional:\n    image: null\n",
+      }),
+    );
+
+    expect(report.modelAttestations[0]?.deploymentImageInventory).toEqual({
+      status: "parsed",
+      images: [],
+    });
+  });
+
+  it.each([
+    ["standard image name", "alpine", "alpine", null, "untagged"],
+    [
+      "tagged image",
+      "library/alpine:latest",
+      "library/alpine",
+      null,
+      "tag_only",
+    ],
+    [
+      "registry hostname",
+      "registry.example.com/team/image",
+      "registry.example.com/team/image",
+      null,
+      "untagged",
+    ],
+    [
+      "registry port and tag",
+      "registry.example.com:5000/team/image:release_1",
+      "registry.example.com:5000/team/image",
+      null,
+      "tag_only",
+    ],
+    [
+      "localhost registry and port",
+      "localhost:5000/team/image",
+      "localhost:5000/team/image",
+      null,
+      "untagged",
+    ],
+    [
+      "IPv4 registry",
+      "192.0.2.10:5000/team/image",
+      "192.0.2.10:5000/team/image",
+      null,
+      "untagged",
+    ],
+    [
+      "double underscore repository separator",
+      "namespace/team__name/image",
+      "namespace/team__name/image",
+      null,
+      "untagged",
+    ],
+    [
+      "repeated hyphen repository separator",
+      "namespace/team---name/image",
+      "namespace/team---name/image",
+      null,
+      "untagged",
+    ],
+    [
+      "mixed repository separators",
+      "namespace/repo.a_b__c--d---e/image",
+      "namespace/repo.a_b__c--d---e/image",
+      null,
+      "untagged",
+    ],
+    [
+      "bracketed IPv6 registry",
+      "[2001:db8::1]:5000/team/image",
+      "[2001:db8::1]:5000/team/image",
+      null,
+      "untagged",
+    ],
+    [
+      "tag that resembles a port",
+      "image:5000",
+      "image",
+      null,
+      "tag_only",
+    ],
+    [
+      "lowercase SHA-256 digest",
+      `registry.example.com/team/image@sha256:${"c".repeat(64)}`,
+      "registry.example.com/team/image",
+      `sha256:${"c".repeat(64)}`,
+      "digest_pinned",
+    ],
+  ] as const)(
+    "parses valid image reference: %s",
+    (_description, reference, image, digest, referenceStatus) => {
+      const report = buildDiscoveryReportWithAppCompose(
+        appComposeWithImageReferences([reference]),
+      );
+      const attestation = report.modelAttestations[0];
+
+      expect(attestation?.deploymentImageInventory).toEqual({
+        status: "parsed",
+        images: [
+          {
+            image,
+            digest,
+            pinnedToDigest: digest !== null,
+            referenceStatus,
+          },
+        ],
+      });
+      expect(attestation).toMatchObject({
+        deploymentProvenance: "not_checked",
+        measurementApproval: "not_approved",
+      });
+    },
+  );
+
+  it.each([
+    ["short digest", `image@sha256:${"a".repeat(63)}`],
+    ["long digest", `image@sha256:${"a".repeat(65)}`],
+    ["invalid digest character", `image@sha256:${"g" + "a".repeat(63)}`],
+    [
+      "uppercase SHA-256 digest (lowercase-only policy)",
+      `image@sha256:${"A".repeat(64)}`,
+    ],
+    ["multiple digest separators", `image@sha256:${"a".repeat(64)}@sha256:${"b".repeat(64)}`],
+    ["empty tag", "image:"],
+    ["invalid tag start", "image:.release"],
+    ["invalid tag character", "image:release?"],
+    ["tag longer than 128 characters", `image:${"a".repeat(129)}`],
+    ["port zero", "registry.example.com:0/team/image"],
+    ["port above 65535", "registry.example.com:65536/team/image"],
+    ["nonnumeric registry port", "registry.example.com:port/team/image"],
+    ["empty path component", "team//image"],
+    ["leading empty path component", "/team/image"],
+    ["trailing empty path component", "team/image/"],
+    ["uppercase repository component", "Team/image"],
+    ["leading repository separator", "_team/image"],
+    ["repository component ending in separator", "team-/image"],
+    ["whitespace inside reference", "team/ my-image"],
+    ["whitespace around reference", " team/image "],
+    ["invalid bracketed IPv6 address", "[not-ipv6]:5000/team/image"],
+    ["malformed bracketed IPv6 registry", "[2001:db8::1:5000/team/image"],
+    ["invalid dotted numeric registry", "192.0.2.999/team/image"],
+  ])(
+    "marks invalid image reference as unsupported: %s",
+    (_description, invalidReference) => {
+      const report = buildDiscoveryReportWithAppCompose(
+        appComposeWithImageReferences(["valid/image", invalidReference]),
+      );
+
+      expect(report.modelAttestations[0]?.deploymentImageInventory).toEqual({
+        status: "unsupported",
+        images: [],
+      });
+    },
+  );
+
+  it("returns no partial images for malformed YAML", () => {
+    const report = buildDiscoveryReportWithAppCompose(
+      JSON.stringify({
+        docker_compose_file:
+          'services:\n  valid:\n    image: "valid/image"\n  broken: [unterminated',
+      }),
+    );
+
+    expect(report.modelAttestations[0]?.deploymentImageInventory).toEqual({
+      status: "malformed",
+      images: [],
+    });
+  });
+
+  it("returns no partial images for unsupported Compose structures", () => {
+    const report = buildDiscoveryReportWithAppCompose(
+      JSON.stringify({
+        docker_compose_file:
+          'services:\n  valid:\n    image: "valid/image"\n  invalid: "not-a-service-object"',
+      }),
+    );
+
+    expect(report.modelAttestations[0]?.deploymentImageInventory).toEqual({
+      status: "unsupported",
+      images: [],
+    });
+  });
+
+  it("rejects appCompose larger than 1 MiB without returning an inventory", () => {
+    const appCompose = JSON.stringify({
+      docker_compose_file: "services: {}",
+      padding: "x".repeat(1024 * 1024),
+    });
+
+    expect(buildDiscoveryReportWithAppCompose(appCompose).modelAttestations[0]?.deploymentImageInventory).toEqual({
+      status: "unsupported",
+      images: [],
+    });
+  });
+
+  it("accepts exactly 200 services", () => {
+    const appCompose = appComposeWithServices(200, true);
+
+    const inventory = buildDiscoveryReportWithAppCompose(appCompose)
+      .modelAttestations[0]?.deploymentImageInventory;
+
+    expect(inventory?.status).toBe("parsed");
+    expect(inventory?.images).toHaveLength(200);
+  });
+
+  it("rejects 201 services without returning a partial inventory", () => {
+    const appCompose = appComposeWithServices(201, true);
+
+    expect(buildDiscoveryReportWithAppCompose(appCompose).modelAttestations[0]?.deploymentImageInventory).toEqual({
+      status: "unsupported",
+      images: [],
+    });
+  });
+
+  it.each([
+    ["malformed JSON", "{not-json"],
+    [
+      "malformed YAML",
+      JSON.stringify({ docker_compose_file: "services:\n  model: [unterminated" }),
+    ],
+    [
+      "unsupported compose structure",
+      JSON.stringify({ docker_compose_file: "containers:\n  model:\n    image: nearai/model" }),
+    ],
+    [
+      "unsupported image reference",
+      JSON.stringify({
+        docker_compose_file: "services:\n  model:\n    image: ${IMAGE_FROM_ENV}\n",
+      }),
+    ],
+  ])("returns a sanitized %s status", (_name, appCompose) => {
+    const report = buildDiscoveryReportWithAppCompose(appCompose);
+
+    expect(report.modelAttestations[0]?.deploymentImageInventory).toEqual({
+      status: _name === "malformed JSON" || _name === "malformed YAML"
+        ? "malformed"
+        : "unsupported",
+      images: [],
+    });
+  });
+
+  it("extracts multiple images without exposing secret-like compose fields", () => {
+    const privateValue = "test-only-secret-environment-value";
+    const appCompose = JSON.stringify({
+      docker_compose_file:
+        "services:\n" +
+        "  api:\n" +
+        "    image: ghcr.io/nearai/api@sha256:" +
+        "b".repeat(64) +
+        "\n" +
+        "    environment:\n" +
+        `      API_TOKEN: ${privateValue}\n` +
+        "  worker:\n" +
+        "    image: nearai/worker:stable\n" +
+        "    command: [do-not-report-this]\n",
+    });
+    const report = buildDiscoveryReportWithAppCompose(appCompose);
+    const serializedReport = JSON.stringify(report);
+
+    expect(report.modelAttestations[0]?.deploymentImageInventory.images).toHaveLength(2);
+    expect(serializedReport).not.toContain(privateValue);
+    expect(serializedReport).not.toContain("do-not-report-this");
+    expect(serializedReport).not.toContain("environment");
+    expect(report.modelAttestations[0]).toMatchObject({
+      deploymentProvenance: "not_checked",
+      measurementApproval: "not_approved",
     });
   });
 
@@ -407,7 +737,10 @@ describe("NEAR AI attestation discovery", () => {
         models: [
           {
             ...successfulModelAttestation,
-            deployment: { runtimeMeasurements },
+            deployment: {
+              appCompose: successfulModelAttestation.deployment.appCompose,
+              runtimeMeasurements,
+            },
           },
         ],
       }),
@@ -447,3 +780,39 @@ describe("NEAR AI attestation discovery", () => {
     expect(() => buildDiscoveryReport(result)).toThrow();
   });
 });
+
+function buildDiscoveryReportWithAppCompose(appCompose: string) {
+  return buildDiscoveryReport({
+    ...successfulResult,
+    models: [
+      {
+        ...successfulModelAttestation,
+        deployment: {
+          ...successfulModelAttestation.deployment,
+          appCompose,
+        },
+      },
+    ],
+  });
+}
+
+function appComposeWithServices(count: number, includeImages: boolean): string {
+  const services = Array.from({ length: count }, (_, index) => {
+    const service = `  service-${index}:`;
+    return includeImages
+      ? `${service}\n    image: nearai/image-${index}`
+      : `${service}\n    command: build`;
+  }).join("\n");
+
+  return JSON.stringify({ docker_compose_file: `services:\n${services}\n` });
+}
+
+function appComposeWithImageReferences(references: readonly string[]): string {
+  const services = references
+    .map(
+      (reference, index) =>
+        `  service-${index}:\n    image: ${JSON.stringify(reference)}`,
+    )
+    .join("\n");
+  return JSON.stringify({ docker_compose_file: `services:\n${services}\n` });
+}

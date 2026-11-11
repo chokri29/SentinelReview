@@ -11,10 +11,15 @@ import {
   type TcbStatus,
   type VerificationError,
 } from "@nearai/inference-sdk/node";
+import { parseDocument } from "yaml";
+import { isIP } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const NEAR_AI_DISCOVERY_MODEL_ID = "z-ai/glm-5.3-flash" as const;
+
+const MAX_APP_COMPOSE_BYTES = 1 * 1024 * 1024;
+const MAX_COMPOSE_SERVICES = 200;
 
 interface DiscoveryAttestationResult {
   readonly gateway: {
@@ -25,9 +30,22 @@ interface DiscoveryAttestationResult {
     readonly gpuEvidence: GpuEvidenceStatus;
     readonly deploymentProvenance: DeploymentProvenanceStatus;
     readonly deployment: {
+      readonly appCompose: string;
       readonly runtimeMeasurements: RuntimeMeasurements;
     };
   }[];
+}
+
+interface DeploymentImageReference {
+  readonly image: string;
+  readonly digest: string | null;
+  readonly pinnedToDigest: boolean;
+  readonly referenceStatus: "digest_pinned" | "tag_only" | "untagged";
+}
+
+interface DeploymentImageInventory {
+  readonly status: "parsed" | "malformed" | "unsupported";
+  readonly images: readonly DeploymentImageReference[];
 }
 
 interface ModelAttestationSummary {
@@ -37,6 +55,7 @@ interface ModelAttestationSummary {
   readonly measurementApproval: "not_approved";
   readonly composeHash: string;
   readonly osImageHash: string;
+  readonly deploymentImageInventory: DeploymentImageInventory;
 }
 
 export interface NearAiDiscoveryReport {
@@ -95,6 +114,206 @@ export function createDiscoveryClientOptions(
 
 function isNonEmptyString(value: string | undefined): value is string {
   return value !== undefined && value.trim().length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isValidRepositoryComponent(value: string): boolean {
+  return /^[a-z0-9]+(?:(?:\.|_|__|-+)[a-z0-9]+)*$/.test(value);
+}
+
+function isValidRegistryPort(value: string): boolean {
+  if (!/^[0-9]+$/.test(value)) {
+    return false;
+  }
+  const port = Number(value);
+  return port >= 1 && port <= 65535;
+}
+
+function isValidRegistryHostname(value: string): boolean {
+  if (value.length > 253) {
+    return false;
+  }
+  const labels = value.split(".");
+  return labels.every(
+    (label) =>
+      label.length <= 63 &&
+      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+  );
+}
+
+function isValidRegistry(value: string): boolean {
+  if (value.startsWith("[")) {
+    const closingBracket = value.indexOf("]");
+    if (closingBracket < 0) {
+      return false;
+    }
+    const address = value.slice(1, closingBracket);
+    const suffix = value.slice(closingBracket + 1);
+    return (
+      isIP(address) === 6 &&
+      (suffix.length === 0 ||
+        (suffix.startsWith(":") &&
+          isValidRegistryPort(suffix.slice(1))))
+    );
+  }
+
+  const colonIndex = value.indexOf(":");
+  if (colonIndex !== value.lastIndexOf(":")) {
+    return false;
+  }
+  const hostname = colonIndex < 0 ? value : value.slice(0, colonIndex);
+  const port = colonIndex < 0 ? undefined : value.slice(colonIndex + 1);
+  if (
+    hostname.length === 0 ||
+    (port !== undefined && !isValidRegistryPort(port))
+  ) {
+    return false;
+  }
+  if (/^[0-9.]+$/.test(hostname)) {
+    return isIP(hostname) === 4;
+  }
+  return isValidRegistryHostname(hostname);
+}
+
+function parseImageReference(
+  reference: string,
+): DeploymentImageReference | undefined {
+  if (
+    reference.length === 0 ||
+    reference.trim() !== reference ||
+    /\s/.test(reference)
+  ) {
+    return undefined;
+  }
+
+  const atIndex = reference.indexOf("@");
+  const hasDigest = atIndex >= 0;
+  const nameAndTag = hasDigest ? reference.slice(0, atIndex) : reference;
+  const digest = hasDigest ? reference.slice(atIndex + 1) : null;
+  if (
+    (hasDigest &&
+      (reference.indexOf("@", atIndex + 1) >= 0 ||
+        digest === null ||
+        !/^sha256:[a-f0-9]{64}$/.test(digest))) ||
+    nameAndTag.length === 0
+  ) {
+    return undefined;
+  }
+
+  const lastSlash = nameAndTag.lastIndexOf("/");
+  const lastColon = nameAndTag.lastIndexOf(":");
+  const hasTag = lastColon > lastSlash;
+  const image = hasTag ? nameAndTag.slice(0, lastColon) : nameAndTag;
+  const tag = hasTag ? nameAndTag.slice(lastColon + 1) : undefined;
+  if (
+    image.length === 0 ||
+    (tag !== undefined && !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(tag))
+  ) {
+    return undefined;
+  }
+
+  const components = image.split("/");
+  if (components.some((component) => component.length === 0)) {
+    return undefined;
+  }
+  const firstComponent = components[0];
+  if (firstComponent === undefined) {
+    return undefined;
+  }
+  const hasRegistry =
+    firstComponent.includes(".") ||
+    firstComponent.includes(":") ||
+    firstComponent === "localhost" ||
+    firstComponent.startsWith("[");
+  if (
+    image.length > 255 ||
+    (hasRegistry &&
+      (components.length < 2 || !isValidRegistry(firstComponent))) ||
+    components
+      .slice(hasRegistry ? 1 : 0)
+      .some((component) => !isValidRepositoryComponent(component))
+  ) {
+    return undefined;
+  }
+
+  return {
+    image,
+    digest,
+    pinnedToDigest: digest !== null,
+    referenceStatus: digest !== null ? "digest_pinned" : hasTag ? "tag_only" : "untagged",
+  };
+}
+
+function parseDeploymentImageInventory(
+  appCompose: string,
+): DeploymentImageInventory {
+  if (Buffer.byteLength(appCompose, "utf8") > MAX_APP_COMPOSE_BYTES) {
+    return { status: "unsupported", images: [] };
+  }
+
+  let appConfiguration: unknown;
+  try {
+    appConfiguration = JSON.parse(appCompose);
+  } catch {
+    return { status: "malformed", images: [] };
+  }
+  if (
+    !isRecord(appConfiguration) ||
+    typeof appConfiguration.docker_compose_file !== "string"
+  ) {
+    return { status: "unsupported", images: [] };
+  }
+
+  let composeDocument;
+  try {
+    composeDocument = parseDocument(appConfiguration.docker_compose_file, {
+      strict: true,
+      uniqueKeys: true,
+    });
+    if (composeDocument.errors.length > 0 || composeDocument.warnings.length > 0) {
+      return { status: "malformed", images: [] };
+    }
+  } catch {
+    return { status: "malformed", images: [] };
+  }
+
+  let compose: unknown;
+  try {
+    compose = composeDocument.toJS();
+  } catch {
+    return { status: "malformed", images: [] };
+  }
+  if (!isRecord(compose) || !isRecord(compose.services)) {
+    return { status: "unsupported", images: [] };
+  }
+  const services = Object.values(compose.services);
+  if (services.length > MAX_COMPOSE_SERVICES) {
+    return { status: "unsupported", images: [] };
+  }
+
+  const images: DeploymentImageReference[] = [];
+  for (const service of services) {
+    if (!isRecord(service)) {
+      return { status: "unsupported", images: [] };
+    }
+    const imageValue = service.image;
+    if (imageValue === undefined || imageValue === null) {
+      continue;
+    }
+    if (typeof imageValue !== "string") {
+      return { status: "unsupported", images: [] };
+    }
+    const parsedReference = parseImageReference(imageValue);
+    if (parsedReference === undefined) {
+      return { status: "unsupported", images: [] };
+    }
+    images.push(parsedReference);
+  }
+
+  return { status: "parsed", images };
 }
 
 function stageForApiResource(resource: unknown): FailureStage {
@@ -238,6 +457,9 @@ export function buildDiscoveryReport(
       measurementApproval: "not_approved" as const,
       composeHash,
       osImageHash,
+      deploymentImageInventory: parseDeploymentImageInventory(
+        attestation.deployment.appCompose,
+      ),
     };
   });
 
