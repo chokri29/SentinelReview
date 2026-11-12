@@ -28,8 +28,8 @@ export interface DeterministicDemoReport {
     readonly status: EvidenceIntegrationStatus;
     readonly evidence: readonly {
       readonly evidenceId: string;
-      readonly embeddedValidationStatus: Evidence["validationStatus"];
-      readonly integrationValidationStatus: EvidenceValidationStatus;
+      readonly declaredValidationStatus: Evidence["validationStatus"] | "not_available";
+      readonly computedValidationStatus: EvidenceValidationStatus;
       readonly presentedAsValidated: boolean;
       readonly issues: readonly string[];
     }[];
@@ -52,8 +52,8 @@ export interface DeterministicDemoReport {
       readonly endLine: number;
       readonly referenceStatus: FindingEvidenceReferenceStatus;
       readonly evidenceId: string;
-      readonly embeddedValidationStatus: Evidence["validationStatus"] | "not_available";
-      readonly integrationValidationStatus: EvidenceValidationStatus | "not_available";
+      readonly declaredValidationStatus: Evidence["validationStatus"] | "not_available";
+      readonly computedValidationStatus: EvidenceValidationStatus | "not_available";
       readonly presentedAsValidated: boolean;
     }[];
     readonly limitations: readonly string[];
@@ -82,16 +82,21 @@ export function buildDeterministicDemoReport(
       const entry = reference.evidenceEntry;
       const validationStatus: EvidenceValidationStatus | "not_available" =
         entry?.validation.status ?? "not_available";
-      const embeddedValidationStatus: Evidence["validationStatus"] | "not_available" =
-        entry?.evidence.validationStatus ?? "not_available";
+      const matchingProducerEvidence = ruleResult.evidence.filter(
+        (record) => record.evidenceId === reference.evidenceRef.evidenceId,
+      );
+      const declaredValidationStatus: Evidence["validationStatus"] | "not_available" =
+        matchingProducerEvidence.length === 1
+          ? matchingProducerEvidence[0]!.validationStatus
+          : "not_available";
       return {
         path: entry?.evidence.path ?? "unavailable",
         startLine: entry?.evidence.startLine ?? 0,
         endLine: entry?.evidence.endLine ?? 0,
         referenceStatus: reference.status,
         evidenceId: reference.evidenceRef.evidenceId,
-        embeddedValidationStatus,
-        integrationValidationStatus: validationStatus,
+        declaredValidationStatus,
+        computedValidationStatus: validationStatus,
         presentedAsValidated:
           reference.status === "resolved" &&
           validationStatus === "validated" &&
@@ -101,14 +106,20 @@ export function buildDeterministicDemoReport(
     limitations: finding.limitations,
   }));
 
-  const evidence = integration.evidenceEntries.map(({ evidence: record, validation }) => ({
-    evidenceId: record.evidenceId,
-    embeddedValidationStatus: record.validationStatus,
-    integrationValidationStatus: validation.status,
-    presentedAsValidated:
-      validation.status === "validated" && integration.status !== "invalid",
-    issues: validation.issues.map((issue) => issue.code),
-  }));
+  const evidence = integration.evidenceEntries.map(
+    ({ evidence: record, validation }, index) => {
+      const declaredValidationStatus: Evidence["validationStatus"] | "not_available" =
+        ruleResult.evidence[index]?.validationStatus ?? "not_available";
+      return {
+        evidenceId: record.evidenceId,
+        declaredValidationStatus,
+        computedValidationStatus: validation.status,
+        presentedAsValidated:
+          validation.status === "validated" && integration.status !== "invalid",
+        issues: validation.issues.map((issue) => issue.code),
+      };
+    },
+  );
 
   const overallAnalysisStatus =
     ruleResult.deterministicAnalysis.status === "inconclusive"

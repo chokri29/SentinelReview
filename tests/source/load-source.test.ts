@@ -65,7 +65,7 @@ describe("loadSource", () => {
     expect(result.files).toEqual([]);
     await writeSourceFile(sourceDirectory, "entry-2000.txt", "");
     await expect(loadSource(sourceDirectory)).rejects.toThrow(
-      "Source entry-count limit exceeded",
+      "Source entry-count limit exceeded (maxEntries: 2000)",
     );
   });
 
@@ -84,8 +84,17 @@ describe("loadSource", () => {
     const overDepthDirectory = path.join(deepestDirectory, "level-33");
     await mkdir(overDepthDirectory);
     await expect(loadSource(sourceDirectory)).rejects.toThrow(
-      "Source directory-depth limit exceeded",
+      "Source directory-depth limit exceeded (maxDepth: 32)",
     );
+  });
+
+  it("includes a configured depth limit in the traversal error", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    await writeSourceFile(sourceDirectory, "nested/deeper/lib.rs", "");
+
+    await expect(
+      loadSource(sourceDirectory, { maxDepth: 1 }),
+    ).rejects.toThrow("Source directory-depth limit exceeded (maxDepth: 1)");
   });
 
   it("counts non-Rust files against the global entry budget", async () => {
@@ -95,7 +104,7 @@ describe("loadSource", () => {
 
     await expect(
       loadSource(sourceDirectory, { maxEntries: 1 }),
-    ).rejects.toThrow("Source entry-count limit exceeded");
+    ).rejects.toThrow("Source entry-count limit exceeded (maxEntries: 1)");
   });
 
   it("counts directories against the global entry budget", async () => {

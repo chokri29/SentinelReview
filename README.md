@@ -31,6 +31,10 @@ npm run demo:deterministic
 npm run demo:deterministic -- safe
 ```
 
+The source loader applies bounded traversal defaults: at most 200 Rust files, 1 MiB per file, 5 MiB total source, 2,000 directory entries examined across the tree (including directories and non-Rust files), and directory depth 32 (source root = depth 0). These limits can be overridden through the loader options when used as a library. Exceeding an entry or depth limit fails the load; no partial snapshot is returned.
+
+When loading a contract for review, point the loader at the contract's Rust source directory (the directory containing the relevant `.rs` files), not the repository or workspace root. This avoids spending the bounded entry budget on unrelated files, build output, or dependencies.
+
 The deterministic demo is local and does not call an AI service:
 
 - With no argument, it loads `demo-fixtures/callback-unguarded/lib.rs`, which contains a callback-result method with no recognized access guard. The narrow rule emits an informational candidate.

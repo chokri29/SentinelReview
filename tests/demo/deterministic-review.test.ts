@@ -64,6 +64,10 @@ impl Contract {
     expect(ruleResult.deterministicAnalysis.findings).toHaveLength(1);
     expect(report.deterministicRule.status).toBe("finding");
     expect(report.evidenceIntegration.status).toBe("complete");
+    expect(report.evidenceIntegration.evidence[0]).toMatchObject({
+      declaredValidationStatus: "unavailable",
+      computedValidationStatus: "validated",
+    });
     expect(report.findings[0]?.origin).toBe("deterministic_rule");
     expect(report.findings[0]?.severity).toBe("info");
     expect(report.findings[0]?.locations[0]).toMatchObject({
@@ -71,8 +75,8 @@ impl Contract {
       startLine: 3,
       endLine: 5,
       referenceStatus: "resolved",
-      embeddedValidationStatus: "validated",
-      integrationValidationStatus: "validated",
+      declaredValidationStatus: "unavailable",
+      computedValidationStatus: "validated",
       presentedAsValidated: true,
     });
     expect(report.snapshot.sourceHash).toBe(snapshot.manifest.sourceHash);
@@ -135,13 +139,13 @@ impl Contract {
     expect(report.evidenceIntegration.status).toBe("invalid");
     expect(report.findings).toHaveLength(1);
     expect(report.evidenceIntegration.evidence[0]).toMatchObject({
-      embeddedValidationStatus: "invalid",
-      integrationValidationStatus: "invalid",
+      declaredValidationStatus: "unavailable",
+      computedValidationStatus: "invalid",
       presentedAsValidated: false,
     });
     expect(report.findings[0]?.locations[0]).toMatchObject({
       referenceStatus: "resolved",
-      integrationValidationStatus: "invalid",
+      computedValidationStatus: "invalid",
       presentedAsValidated: false,
     });
   });
@@ -167,7 +171,7 @@ impl Contract {
     expect(report.findings).toHaveLength(1);
     expect(report.findings[0]?.locations[0]).toMatchObject({
       referenceStatus: "missing",
-      integrationValidationStatus: "not_available",
+      computedValidationStatus: "not_available",
       presentedAsValidated: false,
     });
   });
@@ -178,8 +182,8 @@ impl Contract {
     const output = formatDeterministicDemoReport(report);
 
     expect(output).toContain('"status": "finding"');
-    expect(output).toContain('"integrationValidationStatus": "validated"');
-    expect(output).toContain('"embeddedValidationStatus": "validated"');
+    expect(output).toContain('"computedValidationStatus": "validated"');
+    expect(output).toContain('"declaredValidationStatus": "unavailable"');
     expect(output).toContain("not an exploitability determination");
   });
 
