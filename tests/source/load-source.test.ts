@@ -88,6 +88,15 @@ describe("loadSource", () => {
     );
   });
 
+  it("includes a configured depth limit in the traversal error", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    await writeSourceFile(sourceDirectory, "nested/deeper/lib.rs", "");
+
+    await expect(
+      loadSource(sourceDirectory, { maxDepth: 1 }),
+    ).rejects.toThrow("Source directory-depth limit exceeded (maxDepth: 1)");
+  });
+
   it("counts non-Rust files against the global entry budget", async () => {
     const sourceDirectory = await createSourceDirectory();
     await writeSourceFile(sourceDirectory, "a.txt", "ignored");
@@ -95,7 +104,7 @@ describe("loadSource", () => {
 
     await expect(
       loadSource(sourceDirectory, { maxEntries: 1 }),
-    ).rejects.toThrow("Source entry-count limit exceeded");
+    ).rejects.toThrow("Source entry-count limit exceeded (maxEntries: 1)");
   });
 
   it("counts directories against the global entry budget", async () => {
