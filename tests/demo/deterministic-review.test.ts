@@ -92,6 +92,7 @@ impl Contract {
     const report = buildDeterministicDemoReport(snapshot, alteredResult);
 
     expect(report.evidenceIntegration.status).toBe("invalid");
+    expect(report.findings).toHaveLength(1);
     expect(report.evidenceIntegration.evidence[0]).toMatchObject({
       embeddedValidationStatus: "unavailable",
       integrationValidationStatus: "invalid",
@@ -122,6 +123,7 @@ impl Contract {
     const report = buildDeterministicDemoReport(snapshot, alteredResult);
 
     expect(report.evidenceIntegration.status).toBe("invalid");
+    expect(report.findings).toHaveLength(1);
     expect(report.findings[0]?.locations[0]).toMatchObject({
       referenceStatus: "missing",
       integrationValidationStatus: "not_available",
