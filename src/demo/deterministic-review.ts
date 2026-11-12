@@ -91,7 +91,9 @@ export function buildDeterministicDemoReport(
           entry?.evidence.validationStatus ?? "not_available",
         integrationValidationStatus: validationStatus,
         presentedAsValidated:
-          reference.status === "resolved" && validationStatus === "validated",
+          reference.status === "resolved" &&
+          validationStatus === "validated" &&
+          integration.status !== "invalid",
       };
     }),
     limitations: finding.limitations,
