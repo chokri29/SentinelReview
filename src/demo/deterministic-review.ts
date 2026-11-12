@@ -80,15 +80,17 @@ export function buildDeterministicDemoReport(
     rationale: finding.rationale,
     locations: evidenceRefs.map((reference) => {
       const entry = reference.evidenceEntry;
-      const validationStatus = entry?.validation.status ?? "not_available";
+      const validationStatus: EvidenceValidationStatus | "not_available" =
+        entry?.validation.status ?? "not_available";
+      const embeddedValidationStatus: Evidence["validationStatus"] | "not_available" =
+        entry?.evidence.validationStatus ?? "not_available";
       return {
         path: entry?.evidence.path ?? "unavailable",
         startLine: entry?.evidence.startLine ?? 0,
         endLine: entry?.evidence.endLine ?? 0,
         referenceStatus: reference.status,
         evidenceId: reference.evidenceRef.evidenceId,
-        embeddedValidationStatus:
-          entry?.evidence.validationStatus ?? "not_available",
+        embeddedValidationStatus,
         integrationValidationStatus: validationStatus,
         presentedAsValidated:
           reference.status === "resolved" &&
