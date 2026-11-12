@@ -19,7 +19,7 @@
     .layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,.85fr);gap:14px;margin-top:14px}.panel{border:1px solid #1d2b3e;background:#0d1623;border-radius:13px;overflow:hidden}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:17px 19px;border-bottom:1px solid #1c2a3c}.panel-head h3{margin:0;font-size:13px;letter-spacing:.04em}.muted{color:#8191a7;font-size:11px}.panel-body{padding:18px 19px}
     .finding{padding:15px;border:1px solid #27364a;background:#111d2c;border-radius:10px;margin-bottom:11px}.finding:last-child{margin-bottom:0}.finding-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.finding h4{font-size:13px;margin:0 0 7px;line-height:1.5}.finding p{font-size:12px;color:#9baac0;line-height:1.6;margin:0}.tag{display:inline-flex;align-items:center;border:1px solid #34465c;border-radius:5px;padding:4px 7px;color:#aabbd0;font-size:10px;white-space:nowrap}.tag.info{color:#e5c98a;border-color:#66542e;background:#241e12}.tag.ok{color:#7bd7b3;border-color:#275a4d;background:#10241f}.tag.bad{color:#f19a9a;border-color:#693d45;background:#28171c}
     .location{display:flex;justify-content:space-between;gap:10px;margin-top:12px;padding-top:11px;border-top:1px solid #253449;font-size:11px;color:#b7c5d8}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#83d6d0}
-    .evidence-row{padding:12px 0;border-bottom:1px solid #1d2a3b}.evidence-row:first-child{padding-top:0}.evidence-row:last-child{border-bottom:0;padding-bottom:0}.ev-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.ev-id{font-family:ui-monospace,monospace;font-size:11px;color:#c1d0e2;overflow-wrap:anywhere}.ev-meta{font-size:11px;color:#8292a8;margin-top:7px;line-height:1.6}
+    .evidence-row{padding:12px 0;border-bottom:1px solid #1d2a3b}.evidence-row:first-child{padding-top:0}.evidence-row:last-child{border-bottom:0;padding-bottom:0}.ev-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.ev-id{font-family:ui-monospace,monospace;font-size:11px;color:#c1d0e2;overflow-wrap:anywhere}.ev-meta{font-size:11px;color:#8292a8;margin-top:7px;line-height:1.6}.source-excerpt{margin:10px 0 0;padding:11px 12px;border:1px solid #26384d;border-radius:8px;background:#09111c;color:#b9c9dc;font:11px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre;overflow-x:auto}
     .hash{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;line-height:1.7;color:#91a7c0;overflow-wrap:anywhere;background:#09111c;padding:10px;border-radius:7px;border:1px solid #1b2a3b}
     .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.detail-label{font-size:10px;color:#7f90a7;text-transform:uppercase;letter-spacing:.12em;margin-bottom:7px}.detail-value{font-size:12px;color:#d4deeb;line-height:1.5}
     .notice{border:1px solid #34465a;background:#101c2b;border-radius:10px;padding:14px 15px;color:#a8b8cc;font-size:12px;line-height:1.65}.notice strong{color:#e1eaf5}.notice.warn{border-color:#66532e;background:#211d14}.notice.success{border-color:#275b4e;background:#10211f}
@@ -33,7 +33,7 @@
   <main class="shell">
     <header class="top">
       <div class="brand"><div class="mark">S</div><div><h1>SENTINELREVIEW</h1><p>NEAR smart contract review</p></div></div>
-      <div class="top-meta"><span class="pill local">● Local execution</span><span class="pill">Deterministic demo · No AI inference</span></div>
+      <div class="top-meta"><span class="pill local">● Local execution</span><span class="pill" id="execution-mode">Execution details loading</span></div>
     </header>
     <section class="intro">
       <div><div class="eyebrow">Review workspace / evidence terminal</div><h2>Security review overview</h2><p>A source-backed view of the deterministic demo. Findings are informational candidates; evidence status is recomputed against the loaded source snapshot.</p></div>
@@ -74,7 +74,7 @@
         <div class="panel-body" style="display:grid;gap:12px">
           <div class="notice" id="interpretation">Waiting for report interpretation.</div>
           <div class="notice warn"><strong>Scope limitation.</strong> This demo exercises one narrow deterministic rule against a local fixture. A finding does not establish exploitability; zero findings do not establish safety or absence of vulnerabilities.</div>
-          <div class="notice"><strong>AI analysis:</strong> Not run in this local deterministic demo. No source is sent to NEAR AI or another remote service.</div>
+          <div class="notice" id="execution-disclosure">Execution details will appear with the report.</div>
         </div>
       </div>
     </section>
@@ -87,20 +87,31 @@
   })[char]);
   const badge = (status) => {
     const value = String(status ?? "unknown");
+    const labels = {
+      critical: "Critical", high: "High", medium: "Medium", low: "Low",
+      info: "Informational", unknown: "Unknown",
+      validated: "Validated", partial: "Partial", unavailable: "Unavailable",
+      invalid: "Invalid", complete: "Complete", passed: "Passed",
+      resolved: "Resolved", inconclusive: "Inconclusive", missing: "Missing",
+      ambiguous: "Ambiguous"
+    };
     const kind = value === "validated" || value === "complete" || value === "passed" || value === "resolved"
-      ? "ok" : value === "invalid" || value === "inconclusive" || value === "missing" || value === "ambiguous"
+      ? "ok" : ["critical","high","invalid","inconclusive","missing","ambiguous"].includes(value)
         ? "bad" : "info";
-    return '<span class="tag ' + kind + '">' + escapeHtml(value.replaceAll("_"," ")) + '</span>';
+    return '<span class="tag ' + kind + '">' + escapeHtml(labels[value] ?? value.replaceAll("_"," ")) + '</span>';
   };
   function renderFinding(finding) {
-    const locations = (finding.locations ?? []).map((location) =>
-      '<div class="location"><span><span class="mono">' + escapeHtml(location.path) +
-      '</span> · lines ' + escapeHtml(location.startLine) + '–' + escapeHtml(location.endLine) +
-      '</span><span>' + badge(location.computedValidationStatus) + '</span></div>'
-    ).join("");
+    const locations = (finding.locations ?? []).map((location) => {
+      const excerpt = location.sourceExcerpt
+        ? '<pre class="source-excerpt"><code>' + escapeHtml(location.sourceExcerpt) + '</code></pre>'
+        : '';
+      return '<div class="location"><span><span class="mono">' + escapeHtml(location.path) +
+        '</span> · lines ' + escapeHtml(location.startLine) + '–' + escapeHtml(location.endLine) +
+        '</span><span>' + badge(location.computedValidationStatus) + '</span></div>' + excerpt;
+    }).join("");
     return '<article class="finding"><div class="finding-top"><div><h4>' +
       escapeHtml(finding.title) + '</h4><p>' + escapeHtml(finding.rationale) +
-      '</p></div><span class="tag info">Informational</span></div>' + locations +
+      '</p></div>' + badge(finding.severity) + '</div>' + locations +
       (finding.limitations ?? []).map((item) => '<p style="margin-top:10px;color:#8394aa">' +
         escapeHtml(item) + '</p>').join("") + '</article>';
   }
@@ -125,6 +136,23 @@
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Review request failed");
       const report = payload.report;
+      const execution = payload.execution ?? {};
+      const displayStatus = (value) => String(value ?? "unknown").replaceAll("_", " ");
+      $("execution-mode").textContent = "Execution · " + displayStatus(execution.mode);
+      $("execution-disclosure").textContent =
+        "AI inference: " + displayStatus(execution.aiInference) +
+        ". Source transmission: " + displayStatus(execution.sourceTransmission) + ".";
+      for (const finding of report.findings ?? []) {
+        for (const location of finding.locations ?? []) {
+          const excerpt = payload.sourceExcerpts?.[location.evidenceId];
+          if (excerpt) {
+            const numbered = excerpt.content.split("\n").map((line, index) =>
+              String(excerpt.startLine + index).padStart(4, " ") + " │ " + line
+            ).join("\n");
+            location.sourceExcerpt = numbered;
+          }
+        }
+      }
       $("analysis-status").textContent = report.overallAnalysisStatus.replaceAll("_"," ");
       $("analysis-sub").textContent = report.interpretation;
       $("file-count").textContent = report.snapshot.fileCount;
