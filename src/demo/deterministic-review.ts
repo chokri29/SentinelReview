@@ -117,12 +117,20 @@ export function buildDeterministicDemoReport(
         ? "finding"
         : "no_findings";
 
+  const inconclusiveFindingSummary =
+    ruleResult.deterministicAnalysis.findings.length === 1
+      ? "1 informational candidate"
+      : `${ruleResult.deterministicAnalysis.findings.length} informational candidates`;
+
   const interpretation =
     overallAnalysisStatus === "finding"
       ? "The deterministic rule emitted one or more informational candidates. Review the locations and limitations; this is not an exploitability determination or a complete audit."
-      : overallAnalysisStatus === "inconclusive"
-        ? "The deterministic rule could not reach a conclusive result for all inspected source. This is not a safety determination."
-        : "The selected deterministic rule emitted no findings. This does not establish that the source is safe or free of vulnerabilities.";
+      : overallAnalysisStatus === "inconclusive" &&
+          ruleResult.deterministicAnalysis.findings.length > 0
+        ? `The overall deterministic analysis is inconclusive, but the rule emitted ${inconclusiveFindingSummary}. Review the reported locations and limitations; the inconclusive result means not all inspected source could be assessed conclusively. This is not a safety determination.`
+        : overallAnalysisStatus === "inconclusive"
+          ? "The deterministic rule could not reach a conclusive result for all inspected source. No candidate was emitted by this rule. This is not a safety determination."
+          : "The selected deterministic rule emitted no findings. This does not establish that the source is safe or free of vulnerabilities.";
 
   return Object.freeze({
     snapshot: Object.freeze({
