@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo:deterministic": "node scripts/demo-deterministic-review.ts"
   },
   "engines": {
     "node": ">=24.22.1"
