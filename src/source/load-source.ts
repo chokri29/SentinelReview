@@ -112,7 +112,7 @@ export async function loadSource(
         // Count immediately on encounter, before any per-entry filesystem work.
         entriesSeen += 1;
         if (entriesSeen > limits.maxEntries) {
-          throw new Error("Source entry-count limit exceeded");
+          throw new Error(`Source entry-count limit exceeded (maxEntries: ${limits.maxEntries})`);
         }
         collected.push(entry);
       }
@@ -151,7 +151,7 @@ export async function loadSource(
 
       if (beforeOpen.isDirectory()) {
         if (depth + 1 > limits.maxDepth) {
-          throw new Error("Source directory-depth limit exceeded");
+          throw new Error(`Source directory-depth limit exceeded (maxDepth: ${limits.maxDepth})`);
         }
         await walk(absolutePath, depth + 1);
         continue;
