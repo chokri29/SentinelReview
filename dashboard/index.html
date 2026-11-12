@@ -33,7 +33,7 @@
   <main class="shell">
     <header class="top">
       <div class="brand"><div class="mark">S</div><div><h1>SENTINELREVIEW</h1><p>NEAR smart contract review</p></div></div>
-      <div class="top-meta"><span class="pill local">● Local execution</span><span class="pill" id="execution-mode">Execution details loading</span></div>
+      <div class="top-meta"><span class="pill" id="execution-mode">Execution details loading</span></div>
     </header>
     <section class="intro">
       <div><div class="eyebrow">Review workspace / evidence terminal</div><h2>Security review overview</h2><p>A source-backed view of the deterministic demo. Findings are informational candidates; evidence status is recomputed against the loaded source snapshot.</p></div>
@@ -52,7 +52,7 @@
       </div>
       <div class="panel">
         <div class="panel-head"><h3>Evidence verification</h3><span class="muted" id="evidence-count">—</span></div>
-        <div class="panel-body" id="evidence-list"><div class="loading">Loading evidence…</div></div>
+        <div class="panel-body"><div class="notice">Validated means the snapshot and manifest integrity checks pass, the evidence source hash and canonical file reference match, the line range is in bounds, and any supplied excerpt hash matches. Without an excerpt hash, the result is partial.</div><div id="evidence-list"><div class="loading">Loading evidence…</div></div></div>
       </div>
     </section>
     <section class="layout">
@@ -172,7 +172,7 @@
       $("evidence-list").innerHTML = report.evidenceIntegration.evidence.length
         ? report.evidenceIntegration.evidence.map(renderEvidence).join("")
         : '<div class="empty">No evidence records were emitted for this fixture.</div>';
-      $("footer-state").textContent = "Report loaded · " + fixture + " fixture · local only";
+      $("footer-state").textContent = "Report loaded · " + fixture + " fixture · " + displayStatus(execution.mode);
     } catch (error) {
       $("findings").innerHTML = '<div class="empty error">' + escapeHtml(error.message) + '</div>';
       $("evidence-list").innerHTML = '<div class="empty">Evidence unavailable.</div>';
