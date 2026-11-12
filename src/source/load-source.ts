@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { constants, type BigIntStats } from "node:fs";
-import { lstat, open, realpath, readdir } from "node:fs/promises";
+import { constants, type BigIntStats, type Dirent } from "node:fs";
+import { lstat, open, opendir, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   schemaVersion,
@@ -20,6 +20,10 @@ export interface SourceLoadOptions {
   maxFiles?: number;
   maxFileBytes?: number;
   maxTotalBytes?: number;
+  /** Maximum directory entries examined (files, directories, non-Rust). */
+  maxEntries?: number;
+  /** Maximum directory nesting depth from the source root (root = 0). */
+  maxDepth?: number;
 }
 
 export type ImmutableSourceManifest = Readonly<
@@ -39,6 +43,8 @@ const DEFAULT_LIMITS = {
   maxFiles: 200,
   maxFileBytes: 1024 * 1024,
   maxTotalBytes: 5 * 1024 * 1024,
+  maxEntries: 2000,
+  maxDepth: 32,
 };
 
 function countPhysicalLines(content: string): number {
@@ -93,10 +99,35 @@ export async function loadSource(
   const files: SourceFile[] = [];
   const manifestEntries: SourceManifest["files"][number][] = [];
   let totalBytes = 0;
+  let entriesSeen = 0;
 
-  async function walk(directory: string): Promise<void> {
-    const entries = await readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => compareCanonicalPaths(left.name, right.name));
+  async function readBoundedDirectoryEntries(
+    directory: string,
+  ): Promise<Dirent[]> {
+    const directoryHandle = await opendir(directory);
+    const collected: Dirent[] = [];
+
+    try {
+      for await (const entry of directoryHandle) {
+        // Count immediately on encounter, before any per-entry filesystem work.
+        entriesSeen += 1;
+        if (entriesSeen > limits.maxEntries) {
+          throw new Error("Source entry-count limit exceeded");
+        }
+        collected.push(entry);
+      }
+    } finally {
+      await directoryHandle.close().catch(() => undefined);
+    }
+
+    collected.sort((left, right) =>
+      compareCanonicalPaths(left.name, right.name),
+    );
+    return collected;
+  }
+
+  async function walk(directory: string, depth: number): Promise<void> {
+    const entries = await readBoundedDirectoryEntries(directory);
 
     for (const entry of entries) {
       const absolutePath = path.join(directory, entry.name);
@@ -119,7 +150,10 @@ export async function loadSource(
       }
 
       if (beforeOpen.isDirectory()) {
-        await walk(absolutePath);
+        if (depth + 1 > limits.maxDepth) {
+          throw new Error("Source directory-depth limit exceeded");
+        }
+        await walk(absolutePath, depth + 1);
         continue;
       }
 
@@ -240,7 +274,7 @@ export async function loadSource(
     }
   }
 
-  await walk(root);
+  await walk(root, 0);
 
   manifestEntries.sort((left, right) =>
     compareCanonicalPaths(left.path, right.path),

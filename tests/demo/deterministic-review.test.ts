@@ -71,7 +71,7 @@ impl Contract {
       startLine: 3,
       endLine: 5,
       referenceStatus: "resolved",
-      embeddedValidationStatus: "unavailable",
+      embeddedValidationStatus: "validated",
       integrationValidationStatus: "validated",
       presentedAsValidated: true,
     });
@@ -114,7 +114,7 @@ impl Contract {
     expect(report.evidenceIntegration.status).toBe("invalid");
     expect(report.findings).toHaveLength(1);
     expect(report.evidenceIntegration.evidence[0]).toMatchObject({
-      embeddedValidationStatus: "unavailable",
+      embeddedValidationStatus: "invalid",
       integrationValidationStatus: "invalid",
       presentedAsValidated: false,
     });
@@ -158,7 +158,7 @@ impl Contract {
 
     expect(output).toContain('"status": "finding"');
     expect(output).toContain('"integrationValidationStatus": "validated"');
-    expect(output).toContain('"embeddedValidationStatus": "unavailable"');
+    expect(output).toContain('"embeddedValidationStatus": "validated"');
     expect(output).toContain("not an exploitability determination");
   });
 

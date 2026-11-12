@@ -90,10 +90,16 @@ describe("integrateEvidence", () => {
 
     expect(result.status).toBe("complete");
     expect(result.evidenceEntries[0]?.validation.status).toBe("validated");
+    expect(result.evidenceEntries[0]?.evidence.validationStatus).toBe(
+      "validated",
+    );
     expect(result.findings[0]?.evidenceRefs[0]).toMatchObject({
       evidenceRef: { evidenceId: "evidence-1" },
       status: "resolved",
-      evidenceEntry: { evidence, validation: { status: "validated" } },
+      evidenceEntry: {
+        evidence: { ...evidence, validationStatus: "validated" },
+        validation: { status: "validated" },
+      },
     });
     expect(result.issues).toEqual([]);
   });
@@ -157,13 +163,17 @@ describe("integrateEvidence", () => {
     const result = integrateEvidence([first, second], [], snapshot);
 
     expect(result.status).toBe("invalid");
-    expect(result.evidenceEntries.map(({ evidence }) => evidence)).toEqual([
-      first,
-      second,
-    ]);
+    expect(
+      result.evidenceEntries.map(({ evidence }) => evidence.startLine),
+    ).toEqual([1, 2]);
+    expect(result.evidenceById["same-id"]?.map(({ evidence }) => evidence))
+      .toEqual(result.evidenceEntries.map(({ evidence }) => evidence));
     expect(result.evidenceById["same-id"]).toHaveLength(2);
     expect(result.evidenceEntries.map(({ validation }) => validation.status))
       .toEqual(["validated", "invalid"]);
+    expect(
+      result.evidenceEntries.map(({ evidence }) => evidence.validationStatus),
+    ).toEqual(["validated", "invalid"]);
     expect(result.issues[0]?.code).toBe("duplicate_evidence_id");
   });
 
@@ -245,6 +255,8 @@ describe("integrateEvidence", () => {
     const validMarkedInvalid = makeEvidence(snapshot, "valid-marked-invalid", {
       validationStatus: "invalid",
     });
+    const falselyValidatedBefore = structuredClone(falselyValidated);
+    const validMarkedInvalidBefore = structuredClone(validMarkedInvalid);
 
     const result = integrateEvidence(
       [falselyValidated, validMarkedInvalid],
@@ -254,6 +266,11 @@ describe("integrateEvidence", () => {
 
     expect(result.evidenceEntries.map(({ validation }) => validation.status))
       .toEqual(["invalid", "validated"]);
+    expect(
+      result.evidenceEntries.map(({ evidence }) => evidence.validationStatus),
+    ).toEqual(["invalid", "validated"]);
+    expect(falselyValidated).toEqual(falselyValidatedBefore);
+    expect(validMarkedInvalid).toEqual(validMarkedInvalidBefore);
     expect(result.status).toBe("invalid");
   });
 

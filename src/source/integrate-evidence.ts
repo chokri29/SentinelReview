@@ -80,8 +80,14 @@ function createIssue(
   });
 }
 
-function copyEvidence(evidence: Evidence): Readonly<Evidence> {
-  return Object.freeze({ ...evidence });
+function copyEvidence(
+  evidence: Evidence,
+  validationStatus: Evidence["validationStatus"],
+): Readonly<Evidence> {
+  return Object.freeze({
+    ...evidence,
+    validationStatus,
+  });
 }
 
 function copyFinding(finding: FindingInput): ImmutableFinding {
@@ -103,10 +109,10 @@ export function integrateEvidence(
 ): EvidenceIntegrationResult {
   const issues: EvidenceIntegrationIssue[] = [];
   const evidenceEntries = evidenceRecords.map((evidence) => {
-    const copiedEvidence = copyEvidence(evidence);
+    const validation = validateEvidence(evidence, snapshot);
     return Object.freeze({
-      evidence: copiedEvidence,
-      validation: validateEvidence(copiedEvidence, snapshot),
+      evidence: copyEvidence(evidence, validation.status),
+      validation,
     });
   });
   const mutableEvidenceById: Record<string, EvidenceIntegrationEntry[]> =

@@ -54,6 +54,80 @@ describe("loadSource", () => {
     expect(result.files.map((file) => file.path)).toEqual(["lib.rs"]);
   });
 
+  it("uses a default global entry limit of 2000", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    for (let index = 0; index < 2000; index += 1) {
+      await writeSourceFile(sourceDirectory, `entry-${index}.txt`, "");
+    }
+
+    const result = await loadSource(sourceDirectory);
+
+    expect(result.files).toEqual([]);
+    await writeSourceFile(sourceDirectory, "entry-2000.txt", "");
+    await expect(loadSource(sourceDirectory)).rejects.toThrow(
+      "Source entry-count limit exceeded",
+    );
+  });
+
+  it("uses a default maximum directory depth of 32", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    let deepestDirectory = sourceDirectory;
+    for (let depth = 1; depth <= 32; depth += 1) {
+      deepestDirectory = path.join(deepestDirectory, `level-${depth}`);
+      await mkdir(deepestDirectory);
+    }
+    await writeFile(path.join(deepestDirectory, "lib.rs"), "");
+
+    const result = await loadSource(sourceDirectory);
+
+    expect(result.files.map((file) => file.path)).toHaveLength(1);
+    const overDepthDirectory = path.join(deepestDirectory, "level-33");
+    await mkdir(overDepthDirectory);
+    await expect(loadSource(sourceDirectory)).rejects.toThrow(
+      "Source directory-depth limit exceeded",
+    );
+  });
+
+  it("counts non-Rust files against the global entry budget", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    await writeSourceFile(sourceDirectory, "a.txt", "ignored");
+    await writeSourceFile(sourceDirectory, "b.rs", "");
+
+    await expect(
+      loadSource(sourceDirectory, { maxEntries: 1 }),
+    ).rejects.toThrow("Source entry-count limit exceeded");
+  });
+
+  it("counts directories against the global entry budget", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    await writeSourceFile(sourceDirectory, "nested/lib.rs", "");
+
+    await expect(
+      loadSource(sourceDirectory, { maxEntries: 1 }),
+    ).rejects.toThrow("Source entry-count limit exceeded");
+  });
+
+  it("rejects as soon as the global entry budget is exceeded", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    await writeSourceFile(sourceDirectory, "a.rs", "");
+    await writeSourceFile(sourceDirectory, "b.rs", "");
+
+    await expect(
+      loadSource(sourceDirectory, { maxEntries: 1, maxFiles: 1 }),
+    ).rejects.toThrow("Source entry-count limit exceeded");
+  });
+
+  it("does not return a partial snapshot after a nested entry-limit violation", async () => {
+    const sourceDirectory = await createSourceDirectory();
+    await writeSourceFile(sourceDirectory, "a.rs", "already read");
+    await writeSourceFile(sourceDirectory, "nested/b.rs", "");
+    await writeSourceFile(sourceDirectory, "nested/c.rs", "");
+
+    await expect(
+      loadSource(sourceDirectory, { maxEntries: 3 }),
+    ).rejects.toThrow("Source entry-count limit exceeded");
+  });
+
   it("returns files in deterministic sorted order", async () => {
     const sourceDirectory = await createSourceDirectory();
     await writeSourceFile(sourceDirectory, "z.rs", "");
