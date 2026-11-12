@@ -121,6 +121,19 @@ describe("local dashboard HTTP smoke test", () => {
         presentedAsValidated: true,
       });
       expect(triggeringPayload.report.snapshot.sourceHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(triggeringPayload.execution).toEqual({
+        mode: "local_deterministic_demo",
+        aiInference: "not_run",
+        sourceTransmission: "none",
+      });
+      expect(triggeringPayload.report.findings[0].severity).toBeTruthy();
+      const excerpt = Object.values(triggeringPayload.sourceExcerpts)[0] as {
+        startLine: number;
+        content: string;
+      };
+      expect(excerpt.startLine).toBeGreaterThan(0);
+      expect(excerpt.content.length).toBeGreaterThan(0);
+      expect(triggeringPayload.report.findings[0].locations[0].path).toBeTruthy();
 
       const safeResponse = await fetch(`${baseUrl}/api/review?fixture=safe`);
       expect(safeResponse.status).toBe(200);
