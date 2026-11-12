@@ -32,7 +32,7 @@ function fixtureDirectory(name: FixtureName): string {
 function getPhysicalLines(content: string): string[] {
   if (content.length === 0) return [];
   const lines = content.split(/\r\n|\r|\n/);
-  if (content.endsWith("\\n") || content.endsWith("\\r")) lines.pop();
+  if (content.endsWith("\n") || content.endsWith("\r")) lines.pop();
   return lines;
 }
 
@@ -63,7 +63,7 @@ async function createReport(fixture: FixtureName): Promise<{
 
       sourceExcerpts[location.evidenceId] = {
         startLine: location.startLine,
-        content: lines.slice(location.startLine - 1, location.endLine).join("\\n"),
+        content: lines.slice(location.startLine - 1, location.endLine).join("\n"),
       };
     }
   }
