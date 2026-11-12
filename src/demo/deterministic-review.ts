@@ -103,7 +103,8 @@ export function buildDeterministicDemoReport(
     evidenceId: record.evidenceId,
     embeddedValidationStatus: record.validationStatus,
     integrationValidationStatus: validation.status,
-    presentedAsValidated: validation.status === "validated",
+    presentedAsValidated:
+      validation.status === "validated" && integration.status !== "invalid",
     issues: validation.issues.map((issue) => issue.code),
   }));
 
