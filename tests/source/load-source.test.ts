@@ -65,7 +65,7 @@ describe("loadSource", () => {
     expect(result.files).toEqual([]);
     await writeSourceFile(sourceDirectory, "entry-2000.txt", "");
     await expect(loadSource(sourceDirectory)).rejects.toThrow(
-      "Source entry-count limit exceeded",
+      "Source entry-count limit exceeded (maxEntries: 2000)",
     );
   });
 
@@ -84,7 +84,7 @@ describe("loadSource", () => {
     const overDepthDirectory = path.join(deepestDirectory, "level-33");
     await mkdir(overDepthDirectory);
     await expect(loadSource(sourceDirectory)).rejects.toThrow(
-      "Source directory-depth limit exceeded",
+      "Source directory-depth limit exceeded (maxDepth: 32)",
     );
   });
 
