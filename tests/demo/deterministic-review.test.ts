@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Evidence } from "../../src/contracts/v1.js";
 import { loadSource } from "../../src/source/load-source.js";
+import { runDeterministicDemoCli } from "../../scripts/demo-deterministic-review.js";
 import { runNearRustCallbackPrivateRule } from "../../src/rules/near-rust-callback-private.js";
 import {
   buildDeterministicDemoReport,
