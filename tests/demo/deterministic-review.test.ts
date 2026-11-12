@@ -98,6 +98,27 @@ impl Contract {
     expect(report.interpretation).not.toContain("no findings");
   });
 
+  it("keeps emitted findings visible when another source file makes analysis inconclusive", async () => {
+    const snapshot = await loadFixture(triggeringSource);
+    const original = runNearRustCallbackPrivateRule(snapshot);
+    const mixedResult = {
+      ...original,
+      deterministicAnalysis: {
+        ...original.deterministicAnalysis,
+        status: "inconclusive" as const,
+      },
+    };
+    const report = buildDeterministicDemoReport(snapshot, mixedResult);
+
+    expect(report.deterministicRule.status).toBe("inconclusive");
+    expect(report.deterministicRule.findingCount).toBe(1);
+    expect(report.overallAnalysisStatus).toBe("inconclusive");
+    expect(report.findings).toHaveLength(1);
+    expect(report.interpretation).toContain("overall deterministic analysis is inconclusive");
+    expect(report.interpretation).toContain("1 informational candidate");
+    expect(report.interpretation).toContain("reported locations");
+  });
+
   it("does not present evidence as validated when integration rejects its excerpt hash", async () => {
     const snapshot = await loadFixture(triggeringSource);
     const original = runNearRustCallbackPrivateRule(snapshot);
