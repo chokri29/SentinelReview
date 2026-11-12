@@ -64,6 +64,10 @@ impl Contract {
     expect(ruleResult.deterministicAnalysis.findings).toHaveLength(1);
     expect(report.deterministicRule.status).toBe("finding");
     expect(report.evidenceIntegration.status).toBe("complete");
+    expect(report.evidenceIntegration.evidence[0]).toMatchObject({
+      declaredValidationStatus: "unavailable",
+      computedValidationStatus: "validated",
+    });
     expect(report.findings[0]?.origin).toBe("deterministic_rule");
     expect(report.findings[0]?.severity).toBe("info");
     expect(report.findings[0]?.locations[0]).toMatchObject({
