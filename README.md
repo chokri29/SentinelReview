@@ -29,7 +29,10 @@ npm run typecheck
 npm test
 npm run demo:deterministic
 npm run demo:deterministic -- safe
+npm run dashboard
 ```
+
+The local dashboard binds only to `127.0.0.1` (default port `4173`). Open `http://127.0.0.1:4173` after starting it. It runs the existing deterministic review pipeline against the bundled triggering and safe fixtures and displays the resulting structured report; it does not use AI inference, upload source, or expose a network-facing service. Set `PORT` to choose another local port if needed.
 
 The source loader applies bounded traversal defaults: at most 200 Rust files, 1 MiB per file, 5 MiB total source, 2,000 directory entries examined across the tree (including directories and non-Rust files), and directory depth 32 (source root = depth 0). These limits can be overridden through the loader options when used as a library. Exceeding an entry or depth limit fails the load; no partial snapshot is returned.
 

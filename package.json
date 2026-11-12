@@ -7,7 +7,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "demo:deterministic": "tsx scripts/demo-deterministic-review.ts"
+    "demo:deterministic": "tsx scripts/demo-deterministic-review.ts",
+    "dashboard": "tsx scripts/dashboard-server.ts"
   },
   "engines": {
     "node": ">=24.22.1"
