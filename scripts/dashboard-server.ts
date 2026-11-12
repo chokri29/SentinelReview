@@ -29,9 +29,46 @@ function fixtureDirectory(name: FixtureName): string {
   );
 }
 
-async function createReport(fixture: FixtureName): Promise<DeterministicDemoReport> {
+function getPhysicalLines(content: string): string[] {
+  if (content.length === 0) return [];
+  const lines = content.split(/\r\n|\r|\n/);
+  if (content.endsWith("\\n") || content.endsWith("\\r")) lines.pop();
+  return lines;
+}
+
+async function createReport(fixture: FixtureName): Promise<{
+  report: DeterministicDemoReport;
+  sourceExcerpts: Record<string, { startLine: number; content: string }>;
+}> {
   const snapshot = await loadSource(fixtureDirectory(fixture));
-  return buildDeterministicDemoReport(snapshot);
+  const report = buildDeterministicDemoReport(snapshot);
+  const sourceExcerpts: Record<string, { startLine: number; content: string }> = Object.create(null);
+
+  for (const finding of report.findings) {
+    for (const location of finding.locations) {
+      if (
+        location.referenceStatus !== "resolved" ||
+        (location.computedValidationStatus !== "validated" &&
+          location.computedValidationStatus !== "partial") ||
+        location.startLine < 1 ||
+        location.endLine < location.startLine
+      ) {
+        continue;
+      }
+
+      const file = snapshot.files.find((candidate) => candidate.path === location.path);
+      if (!file) continue;
+      const lines = getPhysicalLines(file.content);
+      if (location.endLine > lines.length) continue;
+
+      sourceExcerpts[location.evidenceId] = {
+        startLine: location.startLine,
+        content: lines.slice(location.startLine - 1, location.endLine).join("\\n"),
+      };
+    }
+  }
+
+  return { report, sourceExcerpts };
 }
 
 function send(
@@ -83,11 +120,17 @@ const server = createServer(async (request, response) => {
 
     try {
       const fixture = requestedFixture as FixtureName;
-      const report = await createReport(fixture);
+      const result = await createReport(fixture);
       send(response, 200, "application/json; charset=utf-8", JSON.stringify({
         fixture,
         generatedAt: new Date().toISOString(),
-        report,
+        execution: {
+          mode: "local_deterministic_demo",
+          aiInference: "not_run",
+          sourceTransmission: "none",
+        },
+        report: result.report,
+        sourceExcerpts: result.sourceExcerpts,
       }));
     } catch {
       send(response, 500, "application/json; charset=utf-8", JSON.stringify({
