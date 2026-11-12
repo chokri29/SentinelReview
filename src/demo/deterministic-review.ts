@@ -28,7 +28,7 @@ export interface DeterministicDemoReport {
     readonly status: EvidenceIntegrationStatus;
     readonly evidence: readonly {
       readonly evidenceId: string;
-      readonly declaredValidationStatus: Evidence["validationStatus"];
+      readonly declaredValidationStatus: Evidence["validationStatus"] | "not_available";
       readonly computedValidationStatus: EvidenceValidationStatus;
       readonly presentedAsValidated: boolean;
       readonly issues: readonly string[];
