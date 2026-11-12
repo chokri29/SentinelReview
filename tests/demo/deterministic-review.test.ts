@@ -139,4 +139,27 @@ impl Contract {
     expect(output).toContain('"embeddedValidationStatus": "unavailable"');
     expect(output).toContain("not an exploitability determination");
   });
+
+  it("runs both bundled fixtures through the local CLI without credentials", async () => {
+    const triggeringOutput: string[] = [];
+    const errors: string[] = [];
+    const triggeringExit = await runDeterministicDemoCli(
+      [],
+      (output) => triggeringOutput.push(output),
+      (output) => errors.push(output),
+    );
+    expect(triggeringExit).toBe(0);
+    expect(errors).toEqual([]);
+    expect(triggeringOutput.join("")).toContain('"overallAnalysisStatus": "finding"');
+
+    const safeOutput: string[] = [];
+    const safeExit = await runDeterministicDemoCli(
+      ["safe"],
+      (output) => safeOutput.push(output),
+      (output) => errors.push(output),
+    );
+    expect(safeExit).toBe(0);
+    expect(safeOutput.join("")).toContain('"overallAnalysisStatus": "no_findings"');
+  });
+
 });
