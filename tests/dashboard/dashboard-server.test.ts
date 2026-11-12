@@ -106,6 +106,9 @@ describe("local dashboard HTTP smoke test", () => {
       expect(page).toContain("SentinelReview — Local Security Review");
       expect(page).toContain("data-fixture=\"triggering\"");
       expect(page).toContain("data-fixture=\"safe\"");
+      expect(page).toContain("Validated means the snapshot and manifest integrity checks pass");
+      expect(page).toContain("badge(finding.severity)");
+      expect(page).toContain('id="execution-disclosure"');
 
       const triggeringResponse = await fetch(
         `${baseUrl}/api/review?fixture=triggering`,
@@ -127,13 +130,17 @@ describe("local dashboard HTTP smoke test", () => {
         sourceTransmission: "none",
       });
       expect(triggeringPayload.report.findings[0].severity).toBeTruthy();
-      const excerpt = Object.values(triggeringPayload.sourceExcerpts)[0] as {
+      const location = triggeringPayload.report.findings[0].locations[0];
+      const excerpt = triggeringPayload.sourceExcerpts[location.evidenceId] as {
         startLine: number;
         content: string;
       };
-      expect(excerpt.startLine).toBeGreaterThan(0);
+      expect(excerpt.startLine).toBe(location.startLine);
+      expect(excerpt.content.split("\n")).toHaveLength(
+        location.endLine - location.startLine + 1,
+      );
       expect(excerpt.content.length).toBeGreaterThan(0);
-      expect(triggeringPayload.report.findings[0].locations[0].path).toBeTruthy();
+      expect(location.path).toBeTruthy();
 
       const safeResponse = await fetch(`${baseUrl}/api/review?fixture=safe`);
       expect(safeResponse.status).toBe(200);
