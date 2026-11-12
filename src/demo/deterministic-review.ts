@@ -106,15 +106,20 @@ export function buildDeterministicDemoReport(
     limitations: finding.limitations,
   }));
 
-  const evidence = integration.evidenceEntries.map(({ evidence: record, validation }, index) => ({
-    evidenceId: record.evidenceId,
-    declaredValidationStatus:
-      ruleResult.evidence[index]?.validationStatus ?? "not_available",
-    computedValidationStatus: validation.status,
-    presentedAsValidated:
-      validation.status === "validated" && integration.status !== "invalid",
-    issues: validation.issues.map((issue) => issue.code),
-  }));
+  const evidence = integration.evidenceEntries.map(
+    ({ evidence: record, validation }, index) => {
+      const declaredValidationStatus: Evidence["validationStatus"] | "not_available" =
+        ruleResult.evidence[index]?.validationStatus ?? "not_available";
+      return {
+        evidenceId: record.evidenceId,
+        declaredValidationStatus,
+        computedValidationStatus: validation.status,
+        presentedAsValidated:
+          validation.status === "validated" && integration.status !== "invalid",
+        issues: validation.issues.map((issue) => issue.code),
+      };
+    },
+  );
 
   const overallAnalysisStatus =
     ruleResult.deterministicAnalysis.status === "inconclusive"
