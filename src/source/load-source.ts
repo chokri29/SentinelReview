@@ -42,7 +42,7 @@ export interface SourceLoadResult {
 const DEFAULT_LIMITS = {
   maxFiles: 200,
   maxFileBytes: 1024 * 1024,
-  maxTotalBytes: 5 *  1024 * 1024,
+  maxTotalBytes: 5 * 1024 * 1024,
   maxEntries: 2000,
   maxDepth: 32,
 };
