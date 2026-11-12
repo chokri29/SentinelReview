@@ -46,6 +46,16 @@ impl Contract {
 }
 `;
 
+  const manuallyGuardedSource = `#[near]
+impl Contract {
+    pub fn on_callback(#[callback_result] result: Result<(), PromiseError>) {
+        if env::predecessor_account_id() != env::current_account_id() {
+            env::panic_str("not private");
+        }
+    }
+}
+`;
+
   it("runs the real rule and integrates its evidence against the same snapshot", async () => {
     const snapshot = await loadFixture(triggeringSource);
     const ruleResult = runNearRustCallbackPrivateRule(snapshot);
@@ -76,6 +86,16 @@ impl Contract {
     expect(report.overallAnalysisStatus).toBe("no_findings");
     expect(report.findings).toEqual([]);
     expect(report.interpretation).toContain("does not establish that the source is safe");
+  });
+
+  it("reports inconclusive analysis without describing a no-findings review", async () => {
+    const snapshot = await loadFixture(manuallyGuardedSource);
+    const report = buildDeterministicDemoReport(snapshot);
+
+    expect(report.deterministicRule.status).toBe("inconclusive");
+    expect(report.overallAnalysisStatus).toBe("inconclusive");
+    expect(report.interpretation).toContain("could not reach a conclusive result");
+    expect(report.interpretation).not.toContain("no findings");
   });
 
   it("does not present evidence as validated when integration rejects its excerpt hash", async () => {

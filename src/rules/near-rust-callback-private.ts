@@ -22,8 +22,9 @@ type ImmutableFinding = Readonly<
 export interface NearRustCallbackPrivateRuleResult {
   readonly deterministicAnalysis: Omit<
     AnalysisResult["deterministicAnalysis"],
-    "findings" | "toolchain"
+    "findings" | "toolchain" | "status"
   > & {
+    readonly status: "finding" | "passed" | "inconclusive";
     readonly toolchain: readonly string[];
     readonly findings: readonly ImmutableFinding[];
   };
