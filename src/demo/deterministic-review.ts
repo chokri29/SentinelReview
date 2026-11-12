@@ -1,4 +1,4 @@
-import type { Evidence, EvidenceValidationSchema } from "../contracts/v1.js";
+import type { Evidence } from "../contracts/v1.js";
 import type { SourceLoadResult } from "../source/load-source.js";
 import {
   integrateEvidence,
@@ -10,7 +10,7 @@ import {
   type NearRustCallbackPrivateRuleResult,
 } from "../rules/near-rust-callback-private.js";
 
-type EvidenceValidationStatus = (typeof EvidenceValidationSchema)["_output"];
+type EvidenceValidationStatus = Evidence["validationStatus"];
 
 export interface DeterministicDemoReport {
   readonly snapshot: {
