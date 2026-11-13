@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start-and-step-by-step-testing">
-    <img src="https://img.shields.io/badge/try%20it%20live-open-9FE870?style=for-the-badge&logo=ultahost&logoColor=purple" alt="Try it live">
+  <a href="#judge-quick-start">
+    <img src="https://img.shields.io/badge/run%20local%20demo-quick%20start-2563eb?style=for-the-badge" alt="Run the local demo">
   </a>
   &nbsp;&nbsp;
   <a href="./LICENSE">
@@ -24,6 +24,17 @@
 </p>
 
 > **Project status:** early-stage research and hackathon prototype. SentinelReview supports investigation and human review. It is not a complete security audit, an exploitability oracle, or a contract safety certification.
+
+## Judge quick start
+
+1. **Use Node.js 24.22.2** (the version used by CI). With nvm: `nvm install 24.22.2 && nvm use 24.22.2`. With fnm: `fnm install 24.22.2 && fnm use 24.22.2`.
+2. **Clone the public repository:** `git clone https://github.com/chokri29/SentinelReview.git`
+3. **Enter the project and install the locked dependencies:** `cd SentinelReview && npm ci`.
+4. **Start the local dashboard:** `npm run dashboard`.
+5. **Open** [http://127.0.0.1:4173](http://127.0.0.1:4173) **on the same machine**. The Callback candidate fixture should show one informational review candidate and its evidence details.
+6. **Switch to Safe example.** The `#[private]` fixture should emit no candidate from this rule, while the dashboard explicitly warns that this is not a safety certification.
+
+The dashboard is intentionally local-only: it does not run AI inference or transmit source code. For typechecking, the full test suite, and the detailed architecture, continue to [Quick start and step-by-step testing](#quick-start-and-step-by-step-testing).
 
 ## At a glance
 
@@ -142,7 +153,7 @@ The server sends no-store, nosniff, Content Security Policy, and no-referrer hea
 
 ### 1. Prerequisites
 
-- Node.js **24.22.1 or newer** (CI currently uses Node.js 24.22.2).
+- Node.js **24.22.2 or newer** (the version used by CI). Use the nvm or fnm commands in the [Judge quick start](#judge-quick-start) to install it.
 - npm (included with Node.js).
 - Git.
 
