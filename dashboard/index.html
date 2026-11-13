@@ -42,7 +42,7 @@
     <section class="grid" aria-label="Review metrics">
       <div class="metric"><div class="label">Analysis status</div><div class="value" id="analysis-status">—</div><div class="sub" id="analysis-sub">Awaiting local report</div></div>
       <div class="metric"><div class="label">Files inspected</div><div class="value" id="file-count">—</div><div class="sub">Rust source files in fixture</div></div>
-      <div class="metric"><div class="label">Rule candidates</div><div class="value" id="finding-count">—</div><div class="sub">NEAR callback privacy rule</div></div>
+      <div class="metric"><div class="label">Candidates detected</div><div class="value" id="finding-count">—</div><div class="sub">One deterministic rule executed</div></div>
       <div class="metric"><div class="label">Evidence integration</div><div class="value" id="evidence-status">—</div><div class="sub" id="evidence-sub">Computed from snapshot</div></div>
     </section>
     <section class="layout">
@@ -52,7 +52,7 @@
       </div>
       <div class="panel">
         <div class="panel-head"><h3>Evidence verification</h3><span class="muted" id="evidence-count">—</span></div>
-        <div class="panel-body"><div class="notice">Validated means the snapshot and manifest integrity checks pass, the evidence source hash and canonical file reference match, the line range is in bounds, and any supplied excerpt hash matches. Without an excerpt hash, the result is partial.</div><div id="evidence-list"><div class="loading">Loading evidence…</div></div></div>
+        <div class="panel-body"><div class="notice">Evidence matched means the snapshot and manifest integrity checks pass, the evidence source hash and canonical file reference match, the line range is in bounds, and any supplied excerpt hash matches. This confirms evidence correspondence to the loaded snapshot; it does not confirm a vulnerability or exploitability. Without an excerpt hash, the result is partial.</div><div id="evidence-list"><div class="loading">Loading evidence…</div></div></div>
       </div>
     </section>
     <section class="layout">
@@ -90,7 +90,7 @@
     const labels = {
       critical: "Critical", high: "High", medium: "Medium", low: "Low",
       info: "Informational", unknown: "Unknown",
-      validated: "Validated", partial: "Partial", unavailable: "Unavailable",
+      validated: "Evidence matched", partial: "Partial", unavailable: "Unavailable",
       invalid: "Invalid", complete: "Complete", passed: "Passed",
       resolved: "Resolved", inconclusive: "Inconclusive", missing: "Missing",
       ambiguous: "Ambiguous"
@@ -154,7 +154,9 @@
         }
       }
       $("analysis-status").textContent = report.overallAnalysisStatus.replaceAll("_"," ");
-      $("analysis-sub").textContent = report.interpretation;
+      $("analysis-sub").textContent = report.findings.length === 0
+        ? "No candidate detected by this rule — not a safety certification."
+        : report.interpretation;
       $("file-count").textContent = report.snapshot.fileCount;
       $("finding-count").textContent = report.deterministicRule.findingCount;
       $("evidence-status").textContent = report.evidenceIntegration.status;
@@ -168,7 +170,7 @@
       $("evidence-count").textContent = report.evidenceIntegration.evidence.length + " evidence records";
       $("findings").innerHTML = report.findings.length
         ? report.findings.map(renderFinding).join("")
-        : '<div class="empty">No candidate was emitted by this selected rule for this fixture.<br>This is not a safety determination.</div>';
+        : '<div class="empty">No candidate detected by this rule.<br>This is not a safety certification or a determination that the source is safe.</div>';
       $("evidence-list").innerHTML = report.evidenceIntegration.evidence.length
         ? report.evidenceIntegration.evidence.map(renderEvidence).join("")
         : '<div class="empty">No evidence records were emitted for this fixture.</div>';
