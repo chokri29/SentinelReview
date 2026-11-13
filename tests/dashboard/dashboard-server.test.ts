@@ -115,6 +115,10 @@ describe("local dashboard HTTP smoke test", () => {
       expect(page).toContain("Presented as evidence matched");
       expect(page).toContain("Not presented as evidence matched");
       expect(page).toContain("This rule emitted no candidate — not a safety proof.");
+      expect(page).toContain("Rule result");
+      expect(page).toContain('report.deterministicRule.findingCount === 0');
+      expect(page).toContain('"No candidate"');
+      expect(page).toContain('"Candidate detected"');
       expect(page).toContain("SentinelReview · Local deterministic preview");
       expect(page).toContain("badge(finding.severity)");
       expect(page).toContain('id="execution-disclosure"');
