@@ -106,7 +106,12 @@ describe("local dashboard HTTP smoke test", () => {
       expect(page).toContain("SentinelReview — Local Security Review");
       expect(page).toContain("data-fixture=\"triggering\"");
       expect(page).toContain("data-fixture=\"safe\"");
-      expect(page).toContain("Validated means the snapshot and manifest integrity checks pass");
+       expect(page).toContain("Evidence matched means the snapshot and manifest integrity checks pass");
+      expect(page).toContain("does not confirm a vulnerability or exploitability");
+      expect(page).toContain("Candidates detected");
+      expect(page).toContain("One deterministic rule executed");
+      expect(page).toContain("No candidate detected by this rule — not a safety certification.");
+      expect(page).toContain('validated: "Evidence matched"');
       expect(page).toContain("badge(finding.severity)");
       expect(page).toContain('id="execution-disclosure"');
 
