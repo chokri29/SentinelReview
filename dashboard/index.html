@@ -120,7 +120,7 @@
       escapeHtml(item.evidenceId) + '</span>' + badge(item.computedValidationStatus) +
       '</div><div class="ev-meta">Producer declared: ' + escapeHtml(item.declaredValidationStatus) +
       ' · Recomputed: ' + escapeHtml(item.computedValidationStatus) +
-      (item.presentedAsValidated ? ' · Presented as validated' : ' · Not presented as validated') +
+      (item.presentedAsValidated ? ' · Presented as evidence matched' : ' · Not presented as evidence matched') +
       ((item.issues ?? []).length ? '<br>Issues: ' + escapeHtml(item.issues.join(", ")) : '') +
       '</div></div>';
   }
@@ -170,7 +170,7 @@
       $("evidence-count").textContent = report.evidenceIntegration.evidence.length + " evidence records";
       $("findings").innerHTML = report.findings.length
         ? report.findings.map(renderFinding).join("")
-        : '<div class="empty">No candidate detected by this rule.<br>This is not a safety certification or a determination that the source is safe.</div>';
+        : '<div class="empty">This rule emitted no candidate — not a safety proof.</div>';
       $("evidence-list").innerHTML = report.evidenceIntegration.evidence.length
         ? report.evidenceIntegration.evidence.map(renderEvidence).join("")
         : '<div class="empty">No evidence records were emitted for this fixture.</div>';
