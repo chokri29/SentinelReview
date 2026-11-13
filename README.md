@@ -1,12 +1,11 @@
 # Sentinel Review
 
-
 <p align="center">
   <img src="https://github.com/chokri29/SentinelReview/blob/main/dashboard/imgSR.jpg" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://crypense-watch.vercel.app/">
+  <a href="#quick-start-and-step-by-step-testing">
     <img src="https://img.shields.io/badge/try%20it%20live-open-9FE870?style=for-the-badge&logo=ultahost&logoColor=purple" alt="Try it live">
   </a>
   &nbsp;&nbsp;
