@@ -64,7 +64,7 @@
             <div><div class="detail-label">File manifest hash</div><div class="hash" id="manifest-hash">—</div></div>
           </div>
           <div class="detail-grid" style="margin-top:16px">
-            <div><div class="detail-label">Rule status</div><div class="detail-value" id="rule-status">—</div></div>
+            <div><div class="detail-label">Rule result</div><div class="detail-value" id="rule-status">—</div></div>
             <div><div class="detail-label">Report generated</div><div class="detail-value" id="generated-at">—</div></div>
           </div>
         </div>
@@ -162,7 +162,9 @@
       $("evidence-status").textContent = report.evidenceIntegration.status;
       $("evidence-sub").textContent = report.evidenceIntegration.issues.length + " integration issues";
       $("rule-id").textContent = report.deterministicRule.id;
-      $("rule-status").textContent = report.deterministicRule.status;
+      $("rule-status").textContent = report.deterministicRule.findingCount === 0
+        ? "No candidate"
+        : "Candidate detected";
       $("source-hash").textContent = report.snapshot.sourceHash;
       $("manifest-hash").textContent = report.snapshot.fileManifestHash;
       $("generated-at").textContent = new Date(payload.generatedAt).toLocaleString();
