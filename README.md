@@ -46,8 +46,9 @@ Configure secrets only in the server environment (see `.env.example` — never c
 - `NEARAI_API_KEY`: Optional NEAR AI API key for gated hypothesis inference.
 - `NEARAI_OPERATOR_APPROVED_COMPOSE_HASH`: Required compose measurement hash to enable NEAR AI inference.
 - `NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH`: Required OS image measurement hash to enable NEAR AI inference.
+- `META_MODEL_API_KEY`: Optional Meta Model API key (`muse-spark-1.3`, Standard model, non-TEE) for public/synthetic fixture hypothesis review only. Private/custom Rust submissions are rejected on the server, and free-credit usage may be used by Meta for product improvement.
 
-Note: The model ID (`z-ai/glm-5.3-flash`) is deliberately hardcoded in the adapter (`src/ai/near-ai-adapter.ts`) and is not configurable via environment variables.
+Note: The NEAR AI model ID (`z-ai/glm-5.3-flash`) and Meta Model API model ID (`muse-spark-1.3`) are deliberately fixed in their respective adapters and are not configurable via environment variables.
 
 ### Commands
 

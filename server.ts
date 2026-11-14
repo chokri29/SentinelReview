@@ -17,6 +17,16 @@ import {
   type NearAiAnalysisResult,
 } from "./src/ai/near-ai-adapter.js";
 import {
+  classifyMetaOperationalError,
+  createMetaModelAdapter,
+  META_FREE_CREDIT_WARNING,
+  META_MAX_PROMPT_BYTES,
+  META_MAX_SOURCE_CONTEXT_BYTES,
+  META_MODEL_ID,
+  META_PROVIDER_NAME,
+  type MetaModelAnalysisResult,
+} from "./src/ai/meta-model-adapter.js";
+import {
   buildDeterministicDemoReport,
   type DeterministicDemoReport,
 } from "./src/demo/deterministic-review.js";
@@ -39,6 +49,8 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
 }
 const CONSENT_HEADER = "x-sentinelreview-ai-consent";
 const CONSENT_HEADER_VALUE = "1";
+const META_CONSENT_HEADER = "x-sentinelreview-meta-consent";
+const META_CONSENT_HEADER_VALUE = "1";
 export const DEFAULT_TOKEN_TTL_MS = 2 * 60 * 1000;
 const MAX_CONSENT_TOKENS = 500;
 const CUSTOM_SNAPSHOT_TTL_MS = 30 * 60 * 1000;
@@ -49,6 +61,15 @@ interface ConsentTokenRecord {
   readonly fixture?: FixtureName;
   readonly snapshotHash: string;
   readonly modelId: typeof NEAR_AI_MODEL_ID;
+  readonly modelConfigFingerprint: string;
+  readonly expiresAt: number;
+}
+
+interface MetaConsentTokenRecord {
+  readonly sourceKind: "fixture";
+  readonly fixture: FixtureName;
+  readonly snapshotHash: string;
+  readonly modelId: typeof META_MODEL_ID;
   readonly modelConfigFingerprint: string;
   readonly expiresAt: number;
 }
@@ -71,6 +92,10 @@ export interface ServerAppOptions {
     readonly osImageHash?: string;
   };
   readonly createAiAdapter?: () => ReturnType<typeof createNearAiAdapter>;
+  readonly getMetaConfig?: () => {
+    readonly apiKey?: string;
+  };
+  readonly createMetaAdapter?: () => ReturnType<typeof createMetaModelAdapter>;
   readonly now?: () => number;
 }
 
@@ -91,6 +116,22 @@ const CustomReviewRequestSchema = z
   .strict();
 
 const AiReviewRequestSchema = z
+  .object({
+    sourceKind: z.enum(["fixture", "custom"]),
+    fixture: z.enum(["triggering", "safe"]).optional(),
+    snapshotHash: z.string().regex(/^[a-f0-9]{64}$/),
+    token: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict()
+  .refine(
+    (value) => value.sourceKind !== "fixture" || value.fixture !== undefined,
+    {
+      message: "fixture is required when sourceKind is fixture",
+      path: ["fixture"],
+    },
+  );
+
+const MetaReviewRequestSchema = z
   .object({
     sourceKind: z.enum(["fixture", "custom"]),
     fixture: z.enum(["triggering", "safe"]).optional(),
@@ -227,7 +268,14 @@ export async function createApp(
       osImageHash: process.env.NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH,
     }));
 
+  const getMetaConfig =
+    options.getMetaConfig ??
+    (() => ({
+      apiKey: process.env.META_MODEL_API_KEY,
+    }));
+
   const consentTokens = new Map<string, ConsentTokenRecord>();
+  const metaConsentTokens = new Map<string, MetaConsentTokenRecord>();
   const customSnapshots = new Map<string, CachedCustomSnapshot>();
 
   function pruneConsentTokens(currentTime = now()): void {
@@ -240,6 +288,21 @@ export async function createApp(
       const oldest = consentTokens.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       consentTokens.delete(oldest);
+    }
+  }
+
+  function pruneMetaConsentTokens(currentTime = now()): void {
+    for (const [token, record] of metaConsentTokens) {
+      if (record.expiresAt <= currentTime) {
+        metaConsentTokens.delete(token);
+      }
+    }
+    while (metaConsentTokens.size >= MAX_CONSENT_TOKENS) {
+      const oldest = metaConsentTokens.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) break;
+      metaConsentTokens.delete(oldest);
     }
   }
 
@@ -296,6 +359,35 @@ export async function createApp(
     return { token, expiresAt: new Date(expiresAt).toISOString() };
   }
 
+  function metaConfigFingerprint(): string {
+    const config = {
+      provider: META_PROVIDER_NAME,
+      modelId: META_MODEL_ID,
+      fixtureOnly: true,
+    };
+    return createHash("sha256")
+      .update(JSON.stringify(config), "utf8")
+      .digest("hex");
+  }
+
+  function issueMetaConsentToken(
+    snapshot: SourceLoadResult,
+    fixture: FixtureName,
+  ): { token: string; expiresAt: string } {
+    pruneMetaConsentTokens();
+    const token = randomBytes(32).toString("hex");
+    const expiresAt = now() + tokenTtlMs;
+    metaConsentTokens.set(token, {
+      sourceKind: "fixture",
+      fixture,
+      snapshotHash: snapshot.manifest.sourceHash,
+      modelId: META_MODEL_ID,
+      modelConfigFingerprint: metaConfigFingerprint(),
+      expiresAt,
+    });
+    return { token, expiresAt: new Date(expiresAt).toISOString() };
+  }
+
   function hasApprovedMeasurementsConfigured(): boolean {
     const cfg = getAiConfig();
     return Boolean(cfg.composeHash && cfg.osImageHash);
@@ -303,6 +395,11 @@ export async function createApp(
 
   function hasApiKeyConfigured(): boolean {
     const cfg = getAiConfig();
+    return Boolean(cfg.apiKey && cfg.apiKey.trim().length > 0);
+  }
+
+  function hasMetaApiKeyConfigured(): boolean {
+    const cfg = getMetaConfig();
     return Boolean(cfg.apiKey && cfg.apiKey.trim().length > 0);
   }
 
@@ -322,6 +419,15 @@ export async function createApp(
     });
   }
 
+  function createMetaAdapter(): ReturnType<typeof createMetaModelAdapter> {
+    if (options.createMetaAdapter) {
+      return options.createMetaAdapter();
+    }
+    return createMetaModelAdapter({
+      getApiKey: () => getMetaConfig().apiKey,
+    });
+  }
+
   function buildReviewPayload(params: {
     sourceKind: SourceKind;
     fixture?: FixtureName;
@@ -331,6 +437,11 @@ export async function createApp(
     const { sourceKind, fixture, snapshot, report } = params;
     const sourceExcerpts = buildSourceExcerpts(snapshot, report);
     const consent = issueConsentToken(sourceKind, snapshot, fixture);
+    const metaConsent =
+      sourceKind === "fixture" && fixture !== undefined
+        ? issueMetaConsentToken(snapshot, fixture)
+        : undefined;
+    const metaConfigured = hasMetaApiKeyConfigured();
 
     return {
       sourceKind,
@@ -357,6 +468,22 @@ export async function createApp(
         approvedMeasurementsConfigured: hasApprovedMeasurementsConfigured(),
         maxSourceContextBytes: 256 * 1024,
         maxPromptBytes: 320 * 1024,
+      },
+      metaConfig: {
+        provider: META_PROVIDER_NAME,
+        modelId: META_MODEL_ID,
+        apiKeyConfigured: metaConfigured,
+        status: metaConfigured ? "configured" : "unavailable",
+        fixtureAllowed: sourceKind === "fixture",
+        freeCreditWarning: META_FREE_CREDIT_WARNING,
+        maxSourceContextBytes: META_MAX_SOURCE_CONTEXT_BYTES,
+        maxPromptBytes: META_MAX_PROMPT_BYTES,
+        ...(metaConsent
+          ? {
+              consentToken: metaConsent.token,
+              consentTokenExpiresAt: metaConsent.expiresAt,
+            }
+          : {}),
       },
     };
   }
@@ -583,6 +710,153 @@ export async function createApp(
         error: sanitized.message,
         errorCode: sanitized.code,
         execution: { aiInference: "failed", sourceTransmission },
+      });
+    }
+  });
+
+  app.post("/api/meta-review", async (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+
+    if (!isSameOriginRequest(req)) {
+      res.status(403).json({ error: "The request origin is not allowed." });
+      return;
+    }
+
+    if (req.headers[META_CONSENT_HEADER] !== META_CONSENT_HEADER_VALUE) {
+      res.status(403).json({
+        error: "Explicit Meta Model API consent header is required.",
+      });
+      return;
+    }
+
+    if (!isJsonContentType(req)) {
+      res.status(415).json({ error: "Content-Type must be application/json." });
+      return;
+    }
+
+    const parsed = MetaReviewRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error:
+          parsed.error.issues[0]?.message ??
+          "Invalid Meta Model API review confirmation payload.",
+      });
+      return;
+    }
+
+    const { sourceKind, fixture, snapshotHash, token } = parsed.data;
+
+    // Single-use Meta token removal occurs synchronously before any awaited work.
+    const tokenRecord = metaConsentTokens.get(token);
+    if (tokenRecord) {
+      metaConsentTokens.delete(token);
+    }
+
+    // Server-side restriction: private/custom Rust source is never sent to Meta Model API.
+    if (sourceKind !== "fixture") {
+      res.status(403).json({
+        error:
+          "Meta Model API is restricted to public/synthetic test fixtures; private or custom Rust source transmission is blocked.",
+        errorCode: "private_source_rejected",
+        provider: META_PROVIDER_NAME,
+        modelId: META_MODEL_ID,
+        execution: {
+          mode: "local_deterministic_plus_meta_model",
+          provider: META_PROVIDER_NAME,
+          modelId: META_MODEL_ID,
+          aiInference: "failed",
+          sourceTransmission: "none",
+        },
+      });
+      return;
+    }
+
+    if (!tokenRecord || tokenRecord.expiresAt <= now()) {
+      res.status(401).json({
+        error:
+          "Meta consent token is missing, expired, or already used. Refresh the deterministic review to mint a fresh token.",
+      });
+      return;
+    }
+
+    if (
+      tokenRecord.sourceKind !== sourceKind ||
+      tokenRecord.fixture !== fixture ||
+      tokenRecord.snapshotHash !== snapshotHash ||
+      tokenRecord.modelId !== META_MODEL_ID ||
+      tokenRecord.modelConfigFingerprint !== metaConfigFingerprint()
+    ) {
+      res.status(409).json({
+        error:
+          "Meta consent token does not match this fixture snapshot or Meta configuration.",
+      });
+      return;
+    }
+
+    let sourceTransmission: "none" | "attempted" = "none";
+
+    try {
+      const snapshot = await loadSource(fixtureDirectory(fixture!));
+      if (snapshot.manifest.sourceHash !== snapshotHash) {
+        res.status(409).json({
+          error:
+            "The fixture snapshot changed since review; re-run deterministic review and confirm again.",
+          execution: {
+            mode: "local_deterministic_plus_meta_model",
+            provider: META_PROVIDER_NAME,
+            modelId: META_MODEL_ID,
+            aiInference: "unavailable",
+            sourceTransmission: "none",
+          },
+        });
+        return;
+      }
+
+      const ruleResult = runNearRustCallbackPrivateRule(snapshot);
+      const metaResult: MetaModelAnalysisResult = await createMetaAdapter()(
+        snapshot,
+        ruleResult.deterministicAnalysis.findings,
+        {
+          sourceKind: "fixture",
+          onSourceTransmission: () => {
+            sourceTransmission = "attempted";
+          },
+        },
+      );
+
+      res.json({
+        provider: META_PROVIDER_NAME,
+        modelId: META_MODEL_ID,
+        sourceKind,
+        fixture,
+        snapshotHash: snapshot.manifest.sourceHash,
+        apiKeyConfigured: hasMetaApiKeyConfigured(),
+        execution: {
+          mode: "local_deterministic_plus_meta_model",
+          provider: META_PROVIDER_NAME,
+          modelId: META_MODEL_ID,
+          aiInference: metaResult.status,
+          sourceTransmission,
+        },
+        metaAnalysis: metaResult,
+      });
+    } catch (error) {
+      const sanitized = classifyMetaOperationalError(error);
+      console.error(
+        `[SentinelReview] Optional Meta Model API review failed (code=${sanitized.code}).`,
+      );
+      res.status(500).json({
+        error: sanitized.message,
+        errorCode: sanitized.code,
+        provider: META_PROVIDER_NAME,
+        modelId: META_MODEL_ID,
+        execution: {
+          mode: "local_deterministic_plus_meta_model",
+          provider: META_PROVIDER_NAME,
+          modelId: META_MODEL_ID,
+          aiInference: "failed",
+          sourceTransmission,
+        },
       });
     }
   });

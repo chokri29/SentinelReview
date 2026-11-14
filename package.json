@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=24.22.1"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "start": "NODE_ENV=production tsx server.ts",
@@ -11,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "vitest run",
+    "diagnose:nearai-model": "tsx scripts/check-nearai-model-metadata.ts",
     "clean": "rm -rf dist server.js"
   },
   "dependencies": {

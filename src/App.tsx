@@ -12,6 +12,7 @@ import type {
   ActiveHighlight,
   AiAnalysisResponse,
   FixtureName,
+  MetaAnalysisResponse,
   ReviewResponse,
 } from "./types/review.ts";
 
@@ -37,10 +38,20 @@ export default function App() {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiResponse, setAiResponse] = useState<AiAnalysisResponse | null>(null);
 
+  const [metaConsentChecked, setMetaConsentChecked] = useState(false);
+  const [metaTokenConsumed, setMetaTokenConsumed] = useState(false);
+  const [metaLoading, setMetaLoading] = useState(false);
+  const [metaError, setMetaError] = useState<string | null>(null);
+  const [metaResponse, setMetaResponse] = useState<MetaAnalysisResponse | null>(
+    null,
+  );
+
   const reviewRequestSeqRef = useRef(0);
   const aiRequestSeqRef = useRef(0);
+  const metaRequestSeqRef = useRef(0);
   const reviewAbortRef = useRef<AbortController | null>(null);
   const aiAbortRef = useRef<AbortController | null>(null);
+  const metaAbortRef = useRef<AbortController | null>(null);
 
   const invalidateInFlightAi = useCallback(() => {
     aiAbortRef.current?.abort();
@@ -51,6 +62,15 @@ export default function App() {
     setAiResponse(null);
     setConsentChecked(false);
     setTokenConsumed(false);
+
+    metaAbortRef.current?.abort();
+    metaAbortRef.current = null;
+    metaRequestSeqRef.current += 1;
+    setMetaLoading(false);
+    setMetaError(null);
+    setMetaResponse(null);
+    setMetaConsentChecked(false);
+    setMetaTokenConsumed(false);
   }, []);
 
   const applyNewReview = useCallback(
@@ -119,6 +139,7 @@ export default function App() {
     return () => {
       reviewAbortRef.current?.abort();
       aiAbortRef.current?.abort();
+      metaAbortRef.current?.abort();
     };
   }, [loadFixture]);
 
@@ -238,6 +259,81 @@ export default function App() {
     }
   }
 
+  async function handleRunMetaAnalysis() {
+    if (
+      !review ||
+      review.sourceKind !== "fixture" ||
+      !review.fixture ||
+      !metaConsentChecked ||
+      metaTokenConsumed ||
+      !review.metaConfig?.consentToken
+    ) {
+      return;
+    }
+
+    metaAbortRef.current?.abort();
+    const controller = new AbortController();
+    metaAbortRef.current = controller;
+    const seq = ++metaRequestSeqRef.current;
+    const expectedSnapshotHash = review.report.snapshot.sourceHash;
+
+    setMetaLoading(true);
+    setMetaError(null);
+
+    try {
+      const res = await fetch("/api/meta-review", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-sentinelreview-meta-consent": "1",
+        },
+        body: JSON.stringify({
+          sourceKind: "fixture",
+          fixture: review.fixture,
+          snapshotHash: expectedSnapshotHash,
+          token: review.metaConfig.consentToken,
+        }),
+        signal: controller.signal,
+      });
+      if (seq !== metaRequestSeqRef.current) return;
+      if (res.status !== 403 && res.status !== 400 && res.status !== 415) {
+        setMetaTokenConsumed(true);
+        setMetaConsentChecked(false);
+      }
+      const payload = (await res.json()) as MetaAnalysisResponse & {
+        error?: string;
+        errorCode?: string;
+      };
+      if (seq !== metaRequestSeqRef.current) return;
+      if (!res.ok) {
+        const baseMessage =
+          payload.error ?? "Optional Meta Model API request failed.";
+        throw new Error(
+          payload.errorCode
+            ? `${baseMessage} (${payload.errorCode})`
+            : baseMessage,
+        );
+      }
+      if (payload.snapshotHash !== expectedSnapshotHash) {
+        throw new Error(
+          "Meta Model API response snapshot hash did not match the active review.",
+        );
+      }
+      setMetaResponse(payload);
+    } catch (err) {
+      if (isAbortError(err) || seq !== metaRequestSeqRef.current) return;
+      setMetaError(
+        err instanceof Error
+          ? err.message
+          : "Optional Meta Model API request failed.",
+      );
+    } finally {
+      if (seq === metaRequestSeqRef.current) {
+        setMetaLoading(false);
+      }
+    }
+  }
+
   async function handleRefreshReviewForToken() {
     if (!review) return;
     if (review.sourceKind === "fixture" && review.fixture) {
@@ -322,6 +418,13 @@ export default function App() {
               aiError={aiError}
               aiResponse={aiResponse}
               onRunAiAnalysis={handleRunAiAnalysis}
+              metaConsentChecked={metaConsentChecked}
+              onMetaConsentChange={setMetaConsentChecked}
+              metaTokenConsumed={metaTokenConsumed}
+              metaLoading={metaLoading}
+              metaError={metaError}
+              metaResponse={metaResponse}
+              onRunMetaAnalysis={handleRunMetaAnalysis}
               onRefreshReviewForToken={handleRefreshReviewForToken}
             />
           </>

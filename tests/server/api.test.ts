@@ -7,6 +7,11 @@ import {
   DEFAULT_TOKEN_TTL_MS,
   type ServerAppOptions,
 } from "../../server.js";
+import {
+  createMetaModelAdapter,
+  META_MODEL_ID,
+  META_PROVIDER_NAME,
+} from "../../src/ai/meta-model-adapter.js";
 import { createNearAiAdapter } from "../../src/ai/near-ai-adapter.js";
 
 const servers: Server[] = [];
@@ -960,5 +965,356 @@ describe("SentinelReview Express API", () => {
     expect(throwJson.execution.aiInference).toBe("failed");
     expect(throwJson.execution.sourceTransmission).toBe("attempted");
   });
+
+  it("isolates Meta Model API configuration, blocks custom source server-side, enforces separate single-use Meta consent, and sanitizes upstream errors", async () => {
+    const metaSecret = "meta-secret-never-leak-777";
+    const metaFetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: "meta-api-ok-1",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  findings: [
+                    {
+                      severity: "medium",
+                      title: "Callback trust assumption hypothesis",
+                      rationale:
+                        "Synthetic hypothesis to illustrate isolated Meta Model API analysis.",
+                      path: "lib.rs",
+                      startLine: 1,
+                      endLine: 3,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const { baseUrl, origin } = await startTestServer({
+      getMetaConfig: () => ({ apiKey: metaSecret }),
+      createMetaAdapter: () =>
+        createMetaModelAdapter({
+          getApiKey: () => metaSecret,
+          fetchFn: metaFetch,
+        }),
+    });
+
+    // 1. GET /api/review includes fixtureAllowed=true and a separate Meta consent token without leaking secrets
+    const fixtureRes = await fetch(`${baseUrl}/api/review?fixture=triggering`);
+    expect(fixtureRes.status).toBe(200);
+    const fixtureRaw = await fixtureRes.text();
+    expect(fixtureRaw).not.toContain(metaSecret);
+    const fixtureJson = JSON.parse(fixtureRaw) as {
+      consentToken: string;
+      report: {
+        snapshot: { sourceHash: string };
+        overallAnalysisStatus: string;
+        findings: { findingId: string }[];
+      };
+      metaConfig: {
+        provider: string;
+        modelId: string;
+        apiKeyConfigured: boolean;
+        status: string;
+        fixtureAllowed: boolean;
+        freeCreditWarning: string;
+        consentToken?: string;
+      };
+    };
+    expect(fixtureJson.metaConfig.provider).toBe(META_PROVIDER_NAME);
+    expect(fixtureJson.metaConfig.modelId).toBe(META_MODEL_ID);
+    expect(fixtureJson.metaConfig.apiKeyConfigured).toBe(true);
+    expect(fixtureJson.metaConfig.status).toBe("configured");
+    expect(fixtureJson.metaConfig.fixtureAllowed).toBe(true);
+    expect(fixtureJson.metaConfig.consentToken).toMatch(/^[a-f0-9]{64}$/);
+    expect(fixtureJson.metaConfig.consentToken).not.toBe(
+      fixtureJson.consentToken,
+    );
+
+    // 2. POST /api/review/custom sets fixtureAllowed=false and omits metaConfig.consentToken
+    const customRes = await fetch(`${baseUrl}/api/review/custom`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        files: [{ path: "src/lib.rs", content: "pub fn a() {}\n" }],
+      }),
+    });
+    expect(customRes.status).toBe(200);
+    const customJson = (await customRes.json()) as {
+      consentToken: string;
+      report: { snapshot: { sourceHash: string } };
+      metaConfig: {
+        fixtureAllowed: boolean;
+        consentToken?: string;
+      };
+    };
+    expect(customJson.metaConfig.fixtureAllowed).toBe(false);
+    expect(customJson.metaConfig.consentToken).toBeUndefined();
+
+    // 3. Passing NEAR AI consent header or NEAR AI token to /api/meta-review is rejected
+    const nearHeaderRejected = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: fixtureJson.report.snapshot.sourceHash,
+        token: fixtureJson.metaConfig.consentToken,
+      }),
+    });
+    expect(nearHeaderRejected.status).toBe(403);
+
+    const nearTokenRejected = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: fixtureJson.report.snapshot.sourceHash,
+        token: fixtureJson.consentToken,
+      }),
+    });
+    expect(nearTokenRejected.status).toBe(401);
+
+    // 4. Server-side custom source rejection on /api/meta-review even with explicit header + token
+    const customBlockedRes = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "custom",
+        snapshotHash: customJson.report.snapshot.sourceHash,
+        token: customJson.consentToken,
+      }),
+    });
+    expect(customBlockedRes.status).toBe(403);
+    const customBlockedJson = (await customBlockedRes.json()) as {
+      errorCode: string;
+      execution: { sourceTransmission: string };
+    };
+    expect(customBlockedJson.errorCode).toBe("private_source_rejected");
+    expect(customBlockedJson.execution.sourceTransmission).toBe("none");
+    expect(metaFetch).not.toHaveBeenCalled();
+
+    // 5. Missing origin & wrong Content-Type & 409 hash mismatch
+    const noOriginRes = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: fixtureJson.report.snapshot.sourceHash,
+        token: fixtureJson.metaConfig.consentToken,
+      }),
+    });
+    expect(noOriginRes.status).toBe(403);
+
+    const wrongCtRes = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "text/plain",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: "{}",
+    });
+    expect(wrongCtRes.status).toBe(415);
+
+    // 6. Successful fixture Meta run + single-use token consumption
+    const metaSuccessRes = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: fixtureJson.report.snapshot.sourceHash,
+        token: fixtureJson.metaConfig.consentToken,
+      }),
+    });
+    expect(metaSuccessRes.status).toBe(200);
+    const metaSuccessRaw = await metaSuccessRes.text();
+    expect(metaSuccessRaw).not.toContain(metaSecret);
+    const metaSuccessJson = JSON.parse(metaSuccessRaw) as {
+      provider: string;
+      modelId: string;
+      execution: { sourceTransmission: string; aiInference: string };
+      metaAnalysis: {
+        status: string;
+        coverage: string;
+        hypotheses: Array<{ origin: string; provider: string }>;
+        provenance: {
+          teeAttestation: string;
+          cryptographicVerification: string;
+        };
+      };
+    };
+    expect(metaSuccessJson.provider).toBe(META_PROVIDER_NAME);
+    expect(metaSuccessJson.modelId).toBe(META_MODEL_ID);
+    expect(metaSuccessJson.execution.sourceTransmission).toBe("attempted");
+    expect(metaSuccessJson.execution.aiInference).toBe("completed");
+    expect(metaSuccessJson.metaAnalysis.status).toBe("completed");
+    expect(metaSuccessJson.metaAnalysis.coverage).toBe("complete");
+    expect(metaSuccessJson.metaAnalysis.provenance.teeAttestation).toBe(
+      "not_applicable",
+    );
+    expect(
+      metaSuccessJson.metaAnalysis.provenance.cryptographicVerification,
+    ).toBe("not_verified");
+    expect(metaSuccessJson.metaAnalysis.hypotheses).toHaveLength(1);
+    expect(metaFetch).toHaveBeenCalledTimes(1);
+
+    // Replay of consumed single-use Meta token must return 401
+    const replayRes = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: fixtureJson.report.snapshot.sourceHash,
+        token: fixtureJson.metaConfig.consentToken,
+      }),
+    });
+    expect(replayRes.status).toBe(401);
+
+    // 7. Sanitized HTTP 429 from mocked Meta upstream & unchanged deterministic review
+    const rateLimitServer = await startTestServer({
+      getMetaConfig: () => ({ apiKey: metaSecret }),
+      createMetaAdapter: () =>
+        createMetaModelAdapter({
+          getApiKey: () => metaSecret,
+          fetchFn: vi.fn(
+            async () =>
+              new Response(`rate limited ${metaSecret}`, { status: 429 }),
+          ),
+        }),
+    });
+    const revRl = (await fetch(
+      `${rateLimitServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      metaConfig: { consentToken: string };
+    };
+    const rlRes = await fetch(`${rateLimitServer.baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: rateLimitServer.origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: revRl.report.snapshot.sourceHash,
+        token: revRl.metaConfig.consentToken,
+      }),
+    });
+    expect(rlRes.status).toBe(200);
+    const rlText = await rlRes.text();
+    expect(rlText).not.toContain(metaSecret);
+    const rlJson = JSON.parse(rlText) as {
+      execution: { sourceTransmission: string; aiInference: string };
+      metaAnalysis: { status: string; coverage: string; errorCode: string };
+    };
+    expect(rlJson.execution.sourceTransmission).toBe("attempted");
+    expect(rlJson.execution.aiInference).toBe("failed");
+    expect(rlJson.metaAnalysis.errorCode).toBe("rate_limited");
+    expect(rlJson.metaAnalysis.coverage).toBe("incomplete");
+
+    // 8. Unexpected adapter throw -> HTTP 500 sanitized response without secret leaks
+    const throwMetaServer = await startTestServer({
+      getMetaConfig: () => ({ apiKey: metaSecret }),
+      createMetaAdapter: () => async (_snapshot, _findings, runOptions) => {
+        runOptions.onSourceTransmission?.();
+        throw Object.assign(
+          new Error(`connect ECONNREFUSED Authorization: Bearer ${metaSecret}`),
+          { code: "ECONNREFUSED" },
+        );
+      },
+    });
+    const revThrow = (await fetch(
+      `${throwMetaServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      metaConfig: { consentToken: string };
+    };
+    const metaThrowRes = await fetch(
+      `${throwMetaServer.baseUrl}/api/meta-review`,
+      {
+        method: "POST",
+        headers: {
+          Origin: throwMetaServer.origin,
+          "Content-Type": "application/json",
+          "x-sentinelreview-meta-consent": "1",
+        },
+        body: JSON.stringify({
+          sourceKind: "fixture",
+          fixture: "triggering",
+          snapshotHash: revThrow.report.snapshot.sourceHash,
+          token: revThrow.metaConfig.consentToken,
+        }),
+      },
+    );
+    expect(metaThrowRes.status).toBe(500);
+    const metaThrowText = await metaThrowRes.text();
+    expect(metaThrowText).not.toContain(metaSecret);
+    expect(metaThrowText).not.toContain("Authorization:");
+    const metaThrowJson = JSON.parse(metaThrowText) as {
+      errorCode: string;
+      execution: { aiInference: string; sourceTransmission: string };
+    };
+    expect(metaThrowJson.errorCode).toBe("network_error");
+    expect(metaThrowJson.execution.aiInference).toBe("failed");
+    expect(metaThrowJson.execution.sourceTransmission).toBe("attempted");
+
+    // Deterministic review remains completely unchanged
+    const fixtureAfterRes = await fetch(
+      `${baseUrl}/api/review?fixture=triggering`,
+    );
+    const fixtureAfterJson = (await fixtureAfterRes.json()) as {
+      report: {
+        overallAnalysisStatus: string;
+        findings: { findingId: string }[];
+      };
+    };
+    expect(fixtureAfterJson.report.overallAnalysisStatus).toBe(
+      fixtureJson.report.overallAnalysisStatus,
+    );
+    expect(fixtureAfterJson.report.findings[0]?.findingId).toBe(
+      fixtureJson.report.findings[0]?.findingId,
+    );
+  });
 });
+
 

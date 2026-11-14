@@ -699,4 +699,64 @@ describe("createNearAiAdapter policy and verification", () => {
       "sk-live-secret-12345",
     );
   });
+
+  it("classifies VerificationError policy.model_attestation_required as model_attestation_required (distinct from measurement_mismatch)", async () => {
+    const snapshot = makeSampleSnapshot();
+    const rule = runNearRustCallbackPrivateRule(snapshot);
+
+    const modelAttRequiredErr = new VerificationError({
+      code: "policy.model_attestation_required",
+    });
+    const classifiedAtt = classifyNearAiOperationalError(
+      modelAttRequiredErr,
+      "attestation",
+    );
+    expect(classifiedAtt.code).toBe("model_attestation_required");
+    expect(classifiedAtt.code).not.toBe("measurement_mismatch");
+
+    const composeMismatchErr = new VerificationError({
+      code: "provenance.compose_file_hash_mismatch",
+      details: {
+        repository: "example/repo",
+        commit: "0123456789abcdef",
+        file: "docker-compose.yml",
+      },
+    });
+    expect(
+      classifyNearAiOperationalError(composeMismatchErr, "attestation").code,
+    ).toBe("measurement_mismatch");
+
+    const createChatCompletion = vi.fn();
+    let transmitted = false;
+    const incognitoRejectedAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "test-key",
+      createClient: () => ({
+        verify: async () => {
+          throw new VerificationError({
+            code: "policy.model_attestation_required",
+          });
+        },
+        createChatCompletion,
+        verifyResponse: vi.fn(),
+      }),
+    });
+
+    const res = await incognitoRejectedAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+      {
+        onSourceTransmission: () => {
+          transmitted = true;
+        },
+      },
+    );
+    expect(res.status).toBe("failed");
+    expect(res.coverage).toBe("not_run");
+    expect(res.errorCode).toBe("model_attestation_required");
+    expect(res.provenance.modelAttestationVerification).toBe("failed");
+    expect(res.provenance.privateModelPolicy).toBe("rejected");
+    expect(transmitted).toBe(false);
+    expect(createChatCompletion).not.toHaveBeenCalled();
+  });
 });

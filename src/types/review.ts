@@ -121,11 +121,24 @@ export interface ReviewResponse {
     maxSourceContextBytes: number;
     maxPromptBytes: number;
   };
+  metaConfig?: {
+    provider: "Meta Model API";
+    modelId: string;
+    apiKeyConfigured: boolean;
+    status: "configured" | "unavailable";
+    fixtureAllowed: boolean;
+    freeCreditWarning: string;
+    maxSourceContextBytes: number;
+    maxPromptBytes: number;
+    consentToken?: string;
+    consentTokenExpiresAt?: string;
+  };
 }
 
 export type NearAiErrorCode =
   | "client_initialization_failed"
   | "attestation_failed"
+  | "model_attestation_required"
   | "measurement_mismatch"
   | "tls_binding_rejected"
   | "auth_failed"
@@ -190,6 +203,66 @@ export interface AiAnalysisResponse {
       modelTcbStatuses?: string[];
       modelDeploymentProvenances?: string[];
       privateModelPolicy: string;
+    };
+  };
+}
+
+export type MetaModelErrorCode =
+  | "private_source_rejected"
+  | "missing_api_key"
+  | "payload_too_large"
+  | "auth_failed"
+  | "rate_limited"
+  | "timeout"
+  | "network_error"
+  | "upstream_error"
+  | "response_too_large"
+  | "invalid_response"
+  | "request_failed";
+
+export interface MetaAnalysisResponse {
+  provider: "Meta Model API";
+  modelId: string;
+  sourceKind: SourceKind;
+  fixture?: FixtureName;
+  snapshotHash: string;
+  apiKeyConfigured: boolean;
+  execution: {
+    mode: string;
+    provider: "Meta Model API";
+    modelId: string;
+    aiInference: "completed" | "failed" | "unavailable";
+    sourceTransmission: "none" | "attempted";
+  };
+  metaAnalysis: {
+    provider: "Meta Model API";
+    modelId: string;
+    status: "completed" | "failed" | "unavailable";
+    coverage: "complete" | "incomplete" | "not_run";
+    errorCode?: MetaModelErrorCode;
+    hypotheses: {
+      hypothesisId: string;
+      provider: "Meta Model API";
+      modelId: string;
+      origin: "ai_hypothesis";
+      severity: string;
+      title: string;
+      rationale: string;
+      path: string;
+      startLine: number;
+      endLine: number;
+      excerpt: string;
+      limitations: string[];
+    }[];
+    limitations: string[];
+    provenance: {
+      provider: "Meta Model API";
+      modelId: string;
+      endpoint: string;
+      teeAttestation: "not_applicable";
+      cryptographicVerification: "not_verified";
+      dataUseWarning: string;
+      responseId?: string;
     };
   };
 }

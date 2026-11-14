@@ -102,6 +102,7 @@ export type SourceCoverageStatus = "complete" | "incomplete" | "not_run";
 export type NearAiErrorCode =
   | "client_initialization_failed"
   | "attestation_failed"
+  | "model_attestation_required"
   | "measurement_mismatch"
   | "tls_binding_rejected"
   | "auth_failed"
@@ -647,11 +648,20 @@ export function classifyNearAiOperationalError(
       };
     }
 
+    if (failure.code === "policy.model_attestation_required") {
+      return {
+        code: "model_attestation_required",
+        message:
+          stage === "attestation"
+            ? "The configured model does not support required model attestation; inference was not sent."
+            : "The configured model does not support required model attestation; no AI findings were accepted.",
+      };
+    }
+
     if (
       failure.code === "policy.tcb_status_not_allowed" ||
       failure.code === "policy.gpu_evidence_required" ||
       failure.code === "policy.debug_enabled" ||
-      failure.code === "policy.model_attestation_required" ||
       failure.code === "provenance.compose_file_hash_mismatch" ||
       failure.code === "provenance.deployment_images_invalid" ||
       failure.code === "measurement.event_log_invalid"
@@ -1210,7 +1220,10 @@ export function createNearAiAdapter(
           ...provenance,
           gatewayVerification:
             classified.code === "tls_binding_rejected" ? "failed" : "unavailable",
-          modelAttestationVerification: "unavailable",
+          modelAttestationVerification:
+            classified.code === "model_attestation_required"
+              ? "failed"
+              : "unavailable",
           privateModelPolicy: "rejected",
         },
         limitations: [classified.message],
@@ -1366,6 +1379,7 @@ export function createNearAiAdapter(
           ...provenance,
           privateModelPolicy:
             classified.code === "measurement_mismatch" ||
+            classified.code === "model_attestation_required" ||
             classified.code === "tls_binding_rejected" ||
             classified.code === "attestation_failed"
               ? "rejected"
