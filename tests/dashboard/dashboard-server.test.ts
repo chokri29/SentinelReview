@@ -278,8 +278,12 @@ describe("local dashboard HTTP smoke test", () => {
 
       const missingRouteResponse = await fetch(`${baseUrl}/missing`);
       expect(missingRouteResponse.status).toBe(404);
-      const rejectedMethodResponse = await fetch(baseUrl, { method: "POST" });
-      expect(rejectedMethodResponse.status).toBe(405);
+      const rejectedRootMethodResponse = await fetch(baseUrl, { method: "POST" });
+      expect(rejectedRootMethodResponse.status).toBe(405);
+      const rejectedReviewMethodResponse = await fetch(`${baseUrl}/api/review`, { method: "POST" });
+      expect(rejectedReviewMethodResponse.status).toBe(405);
+      const rejectedAiReviewMethodResponse = await fetch(`${baseUrl}/api/ai-review`);
+      expect(rejectedAiReviewMethodResponse.status).toBe(405);
     },
     20_000,
   );
