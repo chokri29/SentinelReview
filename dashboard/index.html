@@ -25,6 +25,8 @@
     .notice{border:1px solid #34465a;background:#101c2b;border-radius:10px;padding:14px 15px;color:#a8b8cc;font-size:12px;line-height:1.65}.notice strong{color:#e1eaf5}.notice.warn{border-color:#66532e;background:#211d14}.notice.success{border-color:#275b4e;background:#10211f}
     .empty{padding:26px 14px;text-align:center;color:#94a5ba;font-size:12px;line-height:1.7}.footer{margin-top:16px;display:flex;justify-content:space-between;gap:15px;color:#667991;font-size:10px;letter-spacing:.06em;text-transform:uppercase}
     .loading{color:#8da0b8;font-size:13px;padding:25px}.error{color:#f1a0a0}
+    .consent-box{display:grid;gap:12px}.consent-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px}.consent-meta>div{min-width:0}.consent-files{font:11px/1.6 ui-monospace,monospace;color:#aebfd3;overflow-wrap:anywhere;white-space:pre-wrap}.consent-check{display:flex;gap:10px;align-items:flex-start;color:#d6e0ed;font-size:12px;line-height:1.6}.consent-check input{margin-top:3px}.action-button{justify-self:start;border:1px solid #287d75;background:#10312f;color:#a2eee0;border-radius:8px;padding:10px 14px;font:inherit;font-size:12px;cursor:pointer}.action-button:disabled{opacity:.45;cursor:not-allowed}.ai-finding{padding:13px;border:1px solid #3b3655;background:#171629;border-radius:9px;margin:10px 0}.ai-finding h4{margin:0 0 7px;font-size:13px}.ai-finding p{margin:0;color:#b3b1c8;font-size:12px;line-height:1.6}.ai-meta{color:#9a9ab5;font-size:11px;line-height:1.6;margin-top:8px}
+    @media(max-width:560px){.consent-meta{grid-template-columns:1fr}}
     @media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}.intro{align-items:flex-start;flex-direction:column}}
     @media(max-width:560px){.shell{padding:18px 14px 32px}.top{align-items:flex-start;flex-direction:column}.grid{gap:8px}.metric{padding:13px;min-height:100px}.metric .value{font-size:21px}.detail-grid{grid-template-columns:1fr}.footer{flex-direction:column}}
   </style>
@@ -78,10 +80,28 @@
         </div>
       </div>
     </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="panel-head"><h3>Optional NEAR AI hypotheses</h3><span class="muted">Off until separately authorized</span></div>
+      <div class="panel-body consent-box">
+        <div class="notice warn"><strong>Privacy boundary.</strong> The deterministic review above remains local. Choosing AI review sends the complete source snapshot to the configured NEAR AI model after its attestation and deployment checks pass. E2EE and attestation do not mean the model cannot process the source.</div>
+        <div class="consent-meta">
+          <div><div class="detail-label">Selected source files</div><div class="consent-files" id="consent-files">Load a fixture first.</div></div>
+          <div><div class="detail-label">Total source bytes</div><div class="detail-value" id="consent-bytes">—</div><div class="detail-label" style="margin-top:12px">Model</div><div class="detail-value" id="consent-model">—</div></div>
+        </div>
+        <div><div class="detail-label">Snapshot hash · SHA-256</div><div class="hash" id="consent-hash">—</div></div>
+        <div class="notice warn"><strong>This sends the full source to that model.</strong></div>
+        <label class="consent-check"><input type="checkbox" id="ai-consent-check"><span>I explicitly authorize sending this exact displayed source snapshot to the model shown above for AI analysis. This authorization applies only to the current snapshot and its short-lived consent token.</span></label>
+        <button class="action-button" id="run-ai-review" disabled>Authorize and run NEAR AI review</button>
+        <div class="notice" id="ai-review-status" aria-live="polite">AI inference has not been run. No source has been transmitted.</div>
+        <div id="ai-review-results"><div class="empty">AI hypotheses will appear here separately from deterministic results.</div></div>
+      </div>
+    </section>
     <footer class="footer"><span>SentinelReview · Local deterministic preview</span><span id="footer-state">Waiting for local report</span></footer>
   </main>
 <script>
   const $ = (id) => document.getElementById(id);
+  let activeConsent = null;
+  let activeFixture = null;
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   })[char]);
@@ -124,7 +144,42 @@
       ((item.issues ?? []).length ? '<br>Issues: ' + escapeHtml(item.issues.join(", ")) : '') +
       '</div></div>';
   }
+  function renderAiAnalysis(payload) {
+    const analysis = payload.aiAnalysis ?? {};
+    const provenance = analysis.provenance ?? {};
+    const status = String(analysis.status ?? "unknown").replaceAll("_", " ");
+    const verification = String(analysis.responseVerification ?? "not_run").replaceAll("_", " ");
+    const header = '<div class="notice"><strong>AI analysis:</strong> ' + escapeHtml(status) +
+      ' · <strong>Response verification:</strong> ' + escapeHtml(verification) +
+      '<br><strong>Private-model policy checks:</strong> ' + escapeHtml(provenance.privateModelPolicy ?? "unknown") +
+      ' · <strong>Independent NEAR approval:</strong> ' + escapeHtml(payload.independentNearApproval ?? "not_established") +
+      '<br><strong>Gateway attestation:</strong> ' + escapeHtml(provenance.gatewayVerification ?? "not_run") +
+      ' · <strong>Model attestation:</strong> ' + escapeHtml(provenance.modelAttestationVerification ?? "not_run") +
+      '<br><strong>Model TCB:</strong> ' + escapeHtml((provenance.modelTcbStatuses ?? []).join(", ") || "not available") +
+      ' · <strong>Deployment provenance:</strong> ' + escapeHtml((provenance.modelDeploymentProvenances ?? []).join(", ") || "not available") +
+      '<br><strong>Response signature:</strong> ' + escapeHtml(provenance.responseSignatureKind ?? "not available") +
+      ' · <strong>SDK:</strong> ' + escapeHtml(provenance.sdkVersion ?? "unknown") +
+      '<br><strong>Approved measurements configured:</strong> ' + escapeHtml(payload.approvedMeasurementsConfigured) +
+      ' · <strong>Model:</strong> ' + escapeHtml(payload.modelId ?? "unknown") + '</div>';
+    const findings = (analysis.findings ?? []).map((finding) => {
+      const ref = finding.evidenceRefs?.[0]?.evidenceId;
+      const excerpt = (analysis.evidenceExcerpts ?? []).find((item) => item.evidenceId === ref);
+      const source = excerpt
+        ? '<div class="ai-meta">' + escapeHtml(excerpt.path) + ' · lines ' + escapeHtml(excerpt.startLine) + '–' + escapeHtml(excerpt.endLine) +
+          '<pre class="source-excerpt"><code>' + escapeHtml(excerpt.excerpt) + '</code></pre></div>' : '';
+      return '<article class="ai-finding"><h4>' + escapeHtml(finding.title) + ' ' + badge(finding.severity) +
+        '</h4><p>' + escapeHtml(finding.rationale) + '</p>' + source +
+        '<div class="ai-meta">AI hypothesis · not a confirmed vulnerability</div></article>';
+    }).join("");
+    const limitations = (analysis.limitations ?? []).map((item) => '<div class="ai-meta">' + escapeHtml(item) + '</div>').join("");
+    return header + (findings || '<div class="empty">No AI hypotheses were accepted.</div>') + limitations;
+  }
+
   async function loadFixture(fixture) {
+    activeConsent = null;
+    activeFixture = null;
+    $("ai-consent-check").checked = false;
+    $("run-ai-review").disabled = true;
     $("footer-state").textContent = "Running deterministic rule against local fixture…";
     $("findings").innerHTML = '<div class="loading">Running local review…</div>';
     $("evidence-list").innerHTML = '<div class="loading">Recomputing evidence…</div>';
@@ -137,6 +192,16 @@
       if (!response.ok) throw new Error(payload.error || "Review request failed");
       const report = payload.report;
       const execution = payload.execution ?? {};
+      activeFixture = fixture;
+      activeConsent = payload.consent ?? null;
+      $("ai-consent-check").checked = false;
+      $("run-ai-review").disabled = !activeConsent;
+      $("consent-files").textContent = activeConsent?.files?.join("\n") ?? "Unavailable";
+      $("consent-bytes").textContent = activeConsent ? String(activeConsent.sourceBytes) + " bytes" : "—";
+      $("consent-model").textContent = activeConsent?.modelId ?? "—";
+      $("consent-hash").textContent = activeConsent?.snapshotHash ?? "—";
+      $("ai-review-status").textContent = "AI inference has not been run. No source has been transmitted. The token expires at " + (activeConsent?.expiresAt ?? "unknown") + ".";
+      $("ai-review-results").innerHTML = '<div class="empty">AI hypotheses will appear here separately from deterministic results.</div>';
       const displayStatus = (value) => String(value ?? "unknown").replaceAll("_", " ");
       $("execution-mode").textContent = "Execution · " + displayStatus(execution.mode);
       $("execution-disclosure").textContent =
@@ -183,6 +248,59 @@
       $("footer-state").textContent = "Local report failed";
     }
   }
+  $("ai-consent-check").addEventListener("change", () => {
+    $("run-ai-review").disabled = !activeConsent || !$("ai-consent-check").checked;
+  });
+  $("run-ai-review").addEventListener("click", async () => {
+    if (!activeConsent || !$("ai-consent-check").checked || !activeFixture) return;
+    const consent = activeConsent;
+    const fixtureAtSubmission = activeFixture;
+    $("run-ai-review").disabled = true;
+    $("ai-review-status").textContent = "Submitting the consented request. Source transmission will be reported at the outbound request boundary.";
+    $("ai-review-results").innerHTML = '<div class="loading">Waiting for attestation and AI review…</div>';
+    let observedTransmission = "not confirmed";
+    try {
+      const response = await fetch("/api/ai-review", {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          "X-SentinelReview-AI-Consent": "1"
+        },
+        body: JSON.stringify({
+          fixture: fixtureAtSubmission,
+          snapshotHash: consent.snapshotHash,
+          token: consent.token
+        })
+      });
+      const payload = await response.json();
+      const execution = payload.execution ?? {};
+      if (typeof execution.sourceTransmission === "string") observedTransmission = execution.sourceTransmission;
+      if (!response.ok) throw new Error(payload.error || "AI review request failed");
+      if (activeConsent === consent && activeFixture === fixtureAtSubmission) {
+        $("ai-review-status").textContent = "AI inference: " + String(execution.aiInference ?? "unknown").replaceAll("_", " ") +
+          ". Source transmission: " + String(execution.sourceTransmission ?? "unknown") +
+          ". Consent token consumed; reload the fixture before another request.";
+        $("ai-review-results").innerHTML = renderAiAnalysis(payload);
+        activeConsent = null;
+        $("ai-consent-check").checked = false;
+      }
+    } catch (error) {
+      if (activeConsent === consent && activeFixture === fixtureAtSubmission) {
+        $("ai-review-status").textContent = "AI review did not complete: " + String(error.message ?? error) +
+          ". Source transmission: " + observedTransmission +
+          ". Reload the fixture to obtain a fresh single-use consent token.";
+        $("ai-review-results").innerHTML = '<div class="empty">No AI result was accepted.</div>';
+        activeConsent = null;
+        $("ai-consent-check").checked = false;
+      }
+    } finally {
+      if (activeConsent === consent && activeFixture === fixtureAtSubmission) {
+        $("run-ai-review").disabled = true;
+      }
+    }
+  });
+
   document.querySelectorAll("[data-fixture]").forEach((button) =>
     button.addEventListener("click", () => loadFixture(button.dataset.fixture))
   );
