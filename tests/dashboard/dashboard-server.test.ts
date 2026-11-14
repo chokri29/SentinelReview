@@ -42,7 +42,13 @@ async function startDashboard(): Promise<void> {
     ["--import", "tsx", "scripts/dashboard-server.ts"],
     {
       cwd: process.cwd(),
-      env: { ...process.env, PORT: String(port) },
+      env: {
+        ...process.env,
+        PORT: String(port),
+        NEARAI_API_KEY: "",
+        NEARAI_OPERATOR_APPROVED_COMPOSE_HASH: "",
+        NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH: "",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -122,6 +128,9 @@ describe("local dashboard HTTP smoke test", () => {
       expect(page).toContain("SentinelReview · Local deterministic preview");
       expect(page).toContain("badge(finding.severity)");
       expect(page).toContain('id="execution-disclosure"');
+      expect(page).toContain("This sends the full source to that model.");
+      expect(page).toContain("AI hypothesis · not a confirmed vulnerability");
+      expect(page).toContain("X-SentinelReview-AI-Consent");
 
       const triggeringResponse = await fetch(
         `${baseUrl}/api/review?fixture=triggering`,
@@ -142,6 +151,80 @@ describe("local dashboard HTTP smoke test", () => {
         aiInference: "not_run",
         sourceTransmission: "none",
       });
+      expect(triggeringPayload.consent).toMatchObject({
+        snapshotHash: triggeringPayload.report.snapshot.sourceHash,
+        modelId: "z-ai/glm-5.3-flash",
+        files: ["lib.rs"],
+      });
+      expect(triggeringPayload.consent.token).toMatch(/^[a-f0-9]{64}$/);
+      expect(triggeringPayload.consent.sourceBytes).toBeGreaterThan(0);
+
+      const consentBody = {
+        fixture: "triggering",
+        snapshotHash: triggeringPayload.consent.snapshotHash,
+        token: triggeringPayload.consent.token,
+      };
+      const rejectedOrigin = await fetch(`${baseUrl}/api/ai-review`, {
+        method: "POST",
+        headers: {
+          Origin: "http://attacker.invalid",
+          "Content-Type": "application/json",
+          "X-SentinelReview-AI-Consent": "1",
+        },
+        body: JSON.stringify(consentBody),
+      });
+      expect(rejectedOrigin.status).toBe(403);
+
+      const extraField = await fetch(`${baseUrl}/api/ai-review`, {
+        method: "POST",
+        headers: {
+          Origin: baseUrl,
+          "Content-Type": "application/json",
+          "X-SentinelReview-AI-Consent": "1",
+        },
+        body: JSON.stringify({ ...consentBody, source: "attacker-controlled" }),
+      });
+      expect(extraField.status).toBe(400);
+
+      const missingConsentHeader = await fetch(`${baseUrl}/api/ai-review`, {
+        method: "POST",
+        headers: { Origin: baseUrl, "Content-Type": "application/json" },
+        body: JSON.stringify(consentBody),
+      });
+      expect(missingConsentHeader.status).toBe(403);
+
+      const wrongContentType = await fetch(`${baseUrl}/api/ai-review`, {
+        method: "POST",
+        headers: { Origin: baseUrl, "Content-Type": "text/plain", "X-SentinelReview-AI-Consent": "1" },
+        body: JSON.stringify(consentBody),
+      });
+      expect(wrongContentType.status).toBe(415);
+
+      const postHeaders = {
+        Origin: baseUrl,
+        "Content-Type": "application/json",
+        "X-SentinelReview-AI-Consent": "1",
+      };
+      const concurrent = await Promise.all([
+        fetch(`${baseUrl}/api/ai-review`, {
+          method: "POST", headers: postHeaders, body: JSON.stringify(consentBody),
+        }),
+        fetch(`${baseUrl}/api/ai-review`, {
+          method: "POST", headers: postHeaders, body: JSON.stringify(consentBody),
+        }),
+      ]);
+      expect(concurrent.map((response) => response.status).sort()).toEqual([200, 401]);
+      const acceptedResponse = concurrent.find((response) => response.status === 200)!;
+      const acceptedPayload = await acceptedResponse.json();
+      expect(acceptedPayload.execution).toEqual({
+        mode: "local_deterministic_plus_near_ai",
+        aiInference: "failed",
+        sourceTransmission: "none",
+      });
+      expect(acceptedPayload.approvedMeasurementsConfigured).toBe(false);
+      expect(acceptedPayload.independentNearApproval).toBe("not_established");
+      expect(acceptedPayload.aiAnalysis.findings).toEqual([]);
+      expect(acceptedPayload.aiAnalysis.provenance.privateModelPolicy).toBe("unavailable");
       expect(triggeringPayload.report.findings[0].severity).toBeTruthy();
       const location = triggeringPayload.report.findings[0].locations[0];
       const excerpt = triggeringPayload.sourceExcerpts[location.evidenceId] as {
@@ -164,6 +247,26 @@ describe("local dashboard HTTP smoke test", () => {
       expect(safePayload.report.interpretation).toContain(
         "does not establish that the source is safe",
       );
+      const safeConsentMismatch = await fetch(`${baseUrl}/api/ai-review`, {
+        method: "POST",
+        headers: postHeaders,
+        body: JSON.stringify({
+          fixture: "triggering",
+          snapshotHash: safePayload.consent.snapshotHash,
+          token: safePayload.consent.token,
+        }),
+      });
+      expect(safeConsentMismatch.status).toBe(409);
+      const consumedMismatchToken = await fetch(`${baseUrl}/api/ai-review`, {
+        method: "POST",
+        headers: postHeaders,
+        body: JSON.stringify({
+          fixture: "safe",
+          snapshotHash: safePayload.consent.snapshotHash,
+          token: safePayload.consent.token,
+        }),
+      });
+      expect(consumedMismatchToken.status).toBe(401);
 
       const invalidFixtureResponse = await fetch(
         `${baseUrl}/api/review?fixture=unexpected`,
