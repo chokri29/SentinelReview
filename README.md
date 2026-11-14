@@ -33,8 +33,9 @@
 4. **Start the local dashboard:** `npm run dashboard`.
 5. **Open** [http://127.0.0.1:4173](http://127.0.0.1:4173) **on the same machine**. The Callback candidate fixture should show one informational review candidate and its evidence details.
 6. **Switch to Safe example.** The `#[private]` fixture should emit no candidate from this rule, while the dashboard explicitly warns that this is not a safety certification.
+7. **Optional AI path:** inspect the separate NEAR AI panel. It remains unused unless you check the explicit authorization box and click its action. Do not authorize transmission unless you intend to send the full displayed source snapshot to the configured model.
 
-The dashboard is intentionally local-only: it does not run AI inference or transmit source code. For typechecking, the full test suite, and the detailed architecture, continue to [Quick start and step-by-step testing](#quick-start-and-step-by-step-testing).
+The dashboard defaults to a local deterministic review. Its separate NEAR AI panel remains inactive unless a user explicitly authorizes transmission of the displayed full source snapshot; attestation and operator-approved measurements must also pass. For typechecking, the full test suite, and the detailed architecture, continue to [Quick start and step-by-step testing](#quick-start-and-step-by-step-testing).
 
 ## At a glance
 
@@ -46,8 +47,8 @@ SentinelReview loads a bounded Rust source snapshot, runs a narrow deterministic
 | Deterministic rule | Checks one narrowly scoped NEAR Rust callback-result privacy pattern | Does not perform a complete Rust, NEAR, dependency, or business-logic audit |
 | Evidence validation | Recomputes source/manifest identity, file reference, line range, and optional excerpt-hash correspondence | Does not prove a finding is exploitable or that source is safe |
 | Evidence integration | Resolves finding references and reports complete, partial, or invalid integration | Does not turn a producer-declared status into trusted evidence |
-| Local dashboard | Displays the real structured demo report, source excerpts, hashes, execution metadata, and limitations | Does not run analysis in the browser, call an AI model, upload source, or expose a network service |
-| Optional NEAR AI adapter | Provides a separate, gated inference path for hypotheses and verification metadata | Is not used by the deterministic demo or dashboard; no live inference is implied |
+| Local dashboard | Displays the deterministic report and offers a separate, explicit-consent NEAR AI hypothesis path | Does not run AI by default, accept browser-supplied source, or expose a hosted review service |
+| Optional NEAR AI adapter | Provides a separate, gated inference path for hypotheses and verification metadata | Does not replace deterministic checks or treat AI hypotheses as confirmed vulnerabilities |
 
 ## Architecture
 
@@ -57,7 +58,7 @@ The central trust boundary is:
 
 **AI may propose hypotheses → deterministic checks and evidence validation decide what is reproducible → people interpret the result.**
 
-The current dashboard exercises only the local deterministic path.
+The dashboard defaults to the local deterministic path. A separate user-confirmed action can request optional NEAR AI analysis; the result remains separate from deterministic findings.
 
 ```mermaid
 flowchart TD
@@ -77,7 +78,7 @@ flowchart TD
     L -. "schema and source-evidence checks" .-> F
 ```
 
-The dotted AI path is separate from the local demo. The dashboard does not invoke it.
+The dotted AI path is separate from the deterministic report. The dashboard invokes it only after an explicit, snapshot-bound user confirmation and only when the configured attestation and measurement policy passes.
 
 ### Deterministic review sequence
 
@@ -134,10 +135,13 @@ The dashboard is a local presentation layer over the actual deterministic report
 | Default port | `4173` (override with `PORT`) |
 | `GET /` | Serves `dashboard/index.html` |
 | `GET /api/review?fixture=triggering` | Loads the unguarded bundled fixture and returns its deterministic report |
-| `GET /api/review?fixture=safe` | Loads the `#[private]` fixture and returns its deterministic report |
-| Invalid fixture | HTTP `400` |
+| `GET /api/review?fixture=safe` | Loads the `#[private]` fixture and returns its deterministic report plus a short-lived, single-use consent token bound to its snapshot and fixed model |
+| `POST /api/ai-review` | Runs the separate AI path only with the exact consent token, same-origin request, required consent header, and exact `{ fixture, snapshotHash, token }` body |
+| Invalid fixture or consent body | HTTP `400` |
+| Invalid origin/header | HTTP `403` |
+| Expired/reused token | HTTP `401` |
 | Unknown route | HTTP `404` |
-| Non-GET request | HTTP `405` |
+| Unsupported method | HTTP `405` |
 
 The API response includes the selected fixture, report generation time, structured report, source excerpts taken from the same loaded immutable snapshot, and explicit execution metadata:
 
@@ -145,9 +149,11 @@ The API response includes the selected fixture, report generation time, structur
 - `aiInference: not_run`
 - `sourceTransmission: none`
 
-The dashboard renders the rule's actual severity, candidate count, evidence-integration status, evidence declaration versus recomputed status, source excerpts, source and manifest hashes, and interpretation/limitations. A zero-candidate state retains the warning that this is not a safety determination.
+The dashboard renders the rule's actual severity, candidate count, evidence-integration status, evidence declaration versus recomputed status, source excerpts, source and manifest hashes, and interpretation/limitations. The optional AI panel displays the exact files, source byte count, snapshot hash, and fixed model before requiring a separate checkbox and action. The server reloads the fixture and consumes the token before inference; the browser cannot submit source content or select a model. AI output is displayed as hypotheses in a separate panel.
 
 The server sends no-store, nosniff, Content Security Policy, and no-referrer headers. It uses Node's built-in HTTP and filesystem modules; no separate web framework or hosted dashboard service is required.
+
+The optional `POST /api/ai-review` route requires the exact same-origin `Origin`, `X-SentinelReview-AI-Consent: 1`, JSON content type, and a body containing only `fixture`, `snapshotHash`, and `token`. The token expires after two minutes, is single-use, and is bound to the fixture, source hash, fixed model, SDK version, and current operator measurement configuration. It is not issued as consent; the user must separately confirm in the dashboard. The server reloads the fixture and verifies the snapshot hash before invoking the adapter.
 
 ## Quick start and step-by-step testing
 
@@ -188,7 +194,7 @@ Expected result: TypeScript completes with no type errors.
 npm test
 ```
 
-Expected result: Vitest completes successfully. The suite includes source-loader, deterministic-rule, evidence-validation/integration, AI-adapter policy/verification, and dashboard HTTP smoke tests. The dashboard smoke test starts the real local server on an ephemeral port and exercises both fixture routes, response metadata, evidence excerpts, invalid fixture handling, unknown routes, and rejected HTTP methods.
+Expected result: Vitest completes successfully. The suite includes source-loader, deterministic-rule, evidence-validation/integration, AI-adapter policy/verification, and dashboard HTTP smoke tests. The dashboard smoke test starts the real local server on an ephemeral port and exercises both fixture routes, response metadata, evidence excerpts, invalid fixture handling, consent-body/origin checks, single-use token concurrency, unknown routes, and rejected HTTP methods. Tests clear NEAR AI credentials and approved measurements; they do not make live provider requests.
 
 ### 5. Run the triggering deterministic fixture
 
@@ -242,7 +248,7 @@ $env:PORT = "4174"
 npm run dashboard
 ```
 
-The dashboard is intentionally local-only. It is not a static hosted site, GitHub Pages app, or remote review service. The browser requests the local server, and the local server runs the deterministic pipeline.
+The dashboard binds to loopback and is not a static hosted site, GitHub Pages app, or remote review service. The browser requests the local server, which runs the deterministic pipeline. If the user explicitly authorizes the optional AI path and all configured checks pass, the server sends the full fixture source to the fixed NEAR AI model; this is not a local-only operation. E2EE/attestation do not mean the model cannot process the source.
 
 ### 8. Run the same checks as CI
 
@@ -295,9 +301,15 @@ When loading a contract for review, point the loader at the contract's Rust sour
 
 ## Optional NEAR AI inference (separate from the demo)
 
-Live inference is separate from the local deterministic demo. The demo commands and dashboard do not require credentials and make no provider request. `src/ai/near-ai-adapter.ts` is an implementation interface, not a package-level live-review command.
+Live inference is separate from the local deterministic report. The demo commands never make provider requests. The dashboard does not make a provider request unless a user explicitly authorizes its AI panel; even then, the adapter requires a configured `NEARAI_API_KEY` and operator-approved deployment measurements. `src/ai/near-ai-adapter.ts` remains the inference and verification policy boundary.
 
-When inference is explicitly enabled by an integrating application, the adapter sends the complete loaded Rust-source snapshot (each file's path and contents) together with deterministic-finding metadata to the configured NEAR AI model. It sends neither source nor findings if the complete source exceeds 256 KiB or the serialized prompt exceeds 320 KiB; it does not truncate either to fit. Inference also requires a configured `NEARAI_API_KEY` and explicit operator-approved model deployment measurements. With no approved measurements, inference is not run. Supply the API key through the runtime environment or application configuration, never commit it.
+When inference is explicitly enabled by an integrating application, the adapter sends the complete loaded Rust-source snapshot (each file's path and contents) together with deterministic-finding metadata to the configured NEAR AI model. It sends neither source nor findings if the complete source exceeds 256 KiB or the serialized prompt exceeds 320 KiB; it does not truncate either to fit. Inference also requires a configured `NEARAI_API_KEY` and explicit operator-approved model deployment measurements. With no approved measurements, inference is not run. Supply the API key through the runtime environment or application configuration, never commit it. For the dashboard's optional path, set these values in the environment of the process that starts `npm run dashboard`:
+
+- `NEARAI_API_KEY`
+- `NEARAI_OPERATOR_APPROVED_COMPOSE_HASH`
+- `NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH`
+
+The dashboard model is fixed to `z-ai/glm-5.3-flash`; the browser cannot select a model or supply measurement approvals. The two measurement values are an operator-controlled allowlist and must be established from the actual verified deployment. If they are absent, inference is not run. Do not copy the credentials or measurements into frontend code or commit them.
 
 The client configures the NEAR AI SDK with `e2ee: true` and Ed25519 signing, and validates attestation and response-verification results before accepting AI findings. These implementation details do not establish provider retention practices, absolute confidentiality, or guarantees about data handling; consult current provider documentation and your organization's policies before sending source to a service. No live inference result is asserted by this repository's local demo.
 
@@ -307,7 +319,7 @@ The inference adapter checks the SDK-verified gateway/model attestation against 
 
 After inference, it requires a verified response ID matching the completion ID and a `provider_tee` response signature associated with approved model-attestation evidence before accepting candidates.
 
-These are checks and measurements observed or enforced by the implementation; they are not an independent security review or independent NEAR approval. The separate `scripts/near-ai-attestation-discovery.ts` utility reports gateway/model TCB and GPU verification results, runtime Compose and OS-image hashes, and a bounded Compose image inventory. Discovery explicitly reports `deploymentProvenance: "not_checked"` and `measurementApproval: "not_approved"`. A parsed Compose file is configuration data, not proof that those images were deployed or approved.
+The dashboard keeps `independentNearApproval: "not_established"` separate from the operator allowlist. These are checks and measurements observed or enforced by the implementation; they are not an independent security review or independent NEAR approval. The separate `scripts/near-ai-attestation-discovery.ts` utility reports gateway/model TCB and GPU verification results, runtime Compose and OS-image hashes, and a bounded Compose image inventory. Discovery explicitly reports `deploymentProvenance: "not_checked"` and `measurementApproval: "not_approved"`. A parsed Compose file is configuration data, not proof that those images were deployed or approved.
 
 ### Controlled canary
 
