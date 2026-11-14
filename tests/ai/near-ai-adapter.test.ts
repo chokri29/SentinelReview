@@ -827,6 +827,38 @@ describe("NEAR AI adapter", () => {
     expect(result.findings).toEqual([]);
   });
 
+  it("marks source transmission immediately before the completion request only", async () => {
+    const snapshot = await loadSnapshot();
+    const mock = makeClient();
+    const events: string[] = [];
+    const adapter = createNearAiAdapter({
+      getApiKey: () => "test-only-not-a-real-key",
+      approvedModelDeployments: [approvedDeployment],
+      createClient: () => ({
+        ...mock.client,
+        createChatCompletion: async (request) => {
+          events.push("completion");
+          return mock.client.createChatCompletion(request);
+        },
+      }),
+    });
+
+    const result = await adapter(snapshot, [], {
+      onSourceTransmission: () => events.push("transmission"),
+    });
+
+    expect(result.status).toBe("complete");
+    expect(events).toEqual(["transmission", "completion"]);
+
+    const preflightFailure = makeClient({ attestationFails: true });
+    let transmissionCalled = false;
+    const failed = await createAdapter(preflightFailure).run(snapshot, [], {
+      onSourceTransmission: () => { transmissionCalled = true; },
+    });
+    expect(failed.status).toBe("failed");
+    expect(transmissionCalled).toBe(false);
+  });
+
   it("returns no findings when inference or response verification fails", async () => {
     const snapshot = await loadSnapshot();
     const inferenceFailure = makeClient({ completionFails: true });
@@ -837,9 +869,11 @@ describe("NEAR AI adapter", () => {
     const responseFailure = makeClient({
       responseVerificationFails: true,
     });
+    let transmissionBeforeFailedVerification = false;
     const failedVerification = await createAdapter(responseFailure).run(
       snapshot,
       [],
+      { onSourceTransmission: () => { transmissionBeforeFailedVerification = true; } },
     );
 
     expect(failedInference.findings).toEqual([]);
@@ -847,5 +881,6 @@ describe("NEAR AI adapter", () => {
     expect(failedVerification.findings).toEqual([]);
     expect(failedVerification.evidence).toEqual([]);
     expect(failedVerification.responseVerification).toBe("failed");
+    expect(transmissionBeforeFailedVerification).toBe(true);
   });
 });
