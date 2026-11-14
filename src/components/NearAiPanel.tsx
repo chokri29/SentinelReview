@@ -453,14 +453,11 @@ export function NearAiPanel({
                 />
                 <div className="space-y-1.5">
                   <p className="font-semibold text-amber-100">
-                    Free-credit data-use warning (Meta Model API)
+                    Meta API Data Notice
                   </p>
                   <p>
                     {metaConfig?.freeCreditWarning ??
-                      "Meta's dashboard warns that content submitted while using free credits may be used for product improvement. Standard models (muse-spark-1.3) do not automatically exempt free-credit submissions."}
-                  </p>
-                  <p className="text-amber-300/90">
-                    Only public or synthetic Rust fixtures may be sent. Uploaded or custom Rust code is rejected on the server.
+                      "Meta may use content submitted to improve its products. Therefore, SentinelReview only permits public or synthetic Rust test fixtures in this mode. Private, uploaded, or custom source code is blocked server-side."}
                   </p>
                 </div>
               </div>
@@ -537,7 +534,7 @@ export function NearAiPanel({
                   className="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-sky-500 focus:ring-sky-500 disabled:opacity-50"
                 />
                 <span>
-                  I acknowledge the Meta free-credit data-use warning and separately authorize transmitting this public/synthetic fixture snapshot to{" "}
+                  I acknowledge the Meta API Data Notice and separately authorize transmitting this public/synthetic fixture snapshot to{" "}
                   <span className="font-mono text-sky-300">
                     Meta Model API ({metaConfig?.modelId ?? "muse-spark-1.3"})
                   </span>{" "}

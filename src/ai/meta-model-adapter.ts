@@ -17,7 +17,7 @@ export const META_REQUEST_TIMEOUT_MS = 30_000;
 export const META_MAX_CANDIDATES = 50;
 
 export const META_FREE_CREDIT_WARNING =
-  "Free-credit notice: Meta's dashboard warns that content submitted while using free credits may be used for product improvement. Standard models (muse-spark-1.3) do not automatically exempt free-credit submissions. Only public or synthetic test fixtures are permitted; private/custom Rust code is blocked." as const;
+  "Meta may use content submitted to improve its products. Therefore, SentinelReview only permits public or synthetic Rust test fixtures in this mode. Private, uploaded, or custom source code is blocked server-side." as const;
 
 const META_HYPOTHESIS_LIMITATION =
   "Meta Model API outputs are unverified hypotheses (no TEE attestation or cryptographic response signature) and do not establish exploitability or modify deterministic findings." as const;
