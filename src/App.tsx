@@ -211,10 +211,16 @@ export default function App() {
       }
       const payload = (await res.json()) as AiAnalysisResponse & {
         error?: string;
+        errorCode?: string;
       };
       if (seq !== aiRequestSeqRef.current) return;
       if (!res.ok) {
-        throw new Error(payload.error ?? "Optional NEAR AI request failed.");
+        const baseMessage = payload.error ?? "Optional NEAR AI request failed.";
+        throw new Error(
+          payload.errorCode
+            ? `${baseMessage} (${payload.errorCode})`
+            : baseMessage,
+        );
       }
       if (payload.snapshotHash !== expectedSnapshotHash) {
         throw new Error("NEAR AI response snapshot hash did not match the active review.");

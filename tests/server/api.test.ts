@@ -1,3 +1,4 @@
+import { ApiError } from "@nearai/inference-sdk/node";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -359,7 +360,10 @@ describe("SentinelReview Express API", () => {
                 },
                 deploymentProvenance: "verified",
                 report: {},
-                tlsBinding: { kind: "none" },
+                tlsBinding: {
+                  kind: "attested",
+                  spkiFingerprint: "gw-spki-fp-1",
+                },
               },
               models: [
                 {
@@ -592,7 +596,10 @@ describe("SentinelReview Express API", () => {
       },
       deploymentProvenance: "verified",
       report: {},
-      tlsBinding: { kind: "none" },
+      tlsBinding: {
+        kind: "attested",
+        spkiFingerprint: "gw-spki-fp-1",
+      },
     };
 
     // 1. SDK completion call fails after callback
@@ -806,6 +813,152 @@ describe("SentinelReview Express API", () => {
     expect(successJson.aiAnalysis.status).toBe("complete");
     expect(successJson.aiAnalysis.coverage).toBe("complete");
     expect(successJson.aiAnalysis.responseVerification).toBe("verified");
+  });
+
+  it("rejects gateway tlsBinding kind 'none' with tls_binding_rejected and sanitizes unexpected adapter throws on /api/ai-review", async () => {
+    const approved = {
+      composeHash: "approved-c",
+      osImageHash: "approved-os",
+    };
+    const modelAtt = {
+      signer: { signingAlgo: "ed25519", signingAddress: "model-signer-1" },
+      tcbStatus: "UpToDate",
+      advisoryIds: [],
+      deployment: {
+        appCompose: "m",
+        runtimeMeasurements: approved,
+      },
+      deploymentProvenance: "verified",
+      report: {},
+      gpuEvidence: "verified",
+      signingPublicKey: "pub-key",
+    };
+
+    // 1. Gateway returns tlsBinding: { kind: "none" } -> refused before source transmission
+    const tlsNoneServer = await startTestServer({
+      getAiConfig: () => ({
+        apiKey: "test-key",
+        composeHash: approved.composeHash,
+        osImageHash: approved.osImageHash,
+      }),
+      createAiAdapter: () =>
+        createNearAiAdapter({
+          approvedModelDeployments: [approved],
+          getApiKey: () => "test-key",
+          createClient: () => ({
+            verify: async () => ({
+              gateway: {
+                signer: { signingAlgo: "ed25519", signingAddress: "gw-signer-1" },
+                tcbStatus: "UpToDate",
+                advisoryIds: [],
+                deployment: {
+                  appCompose: "gw",
+                  runtimeMeasurements: { composeHash: "g1", osImageHash: "g2" },
+                },
+                deploymentProvenance: "verified",
+                report: {},
+                tlsBinding: { kind: "none" },
+              },
+              models: [modelAtt],
+              verifiedAt: Date.now(),
+            }),
+            createChatCompletion: vi.fn(),
+            verifyResponse: vi.fn(),
+          }),
+        }),
+    });
+
+    const rev1 = (await fetch(
+      `${tlsNoneServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+    };
+
+    const tlsNoneRes = await fetch(`${tlsNoneServer.baseUrl}/api/ai-review`, {
+      method: "POST",
+      headers: {
+        Origin: tlsNoneServer.origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: rev1.report.snapshot.sourceHash,
+        token: rev1.consentToken,
+      }),
+    });
+    expect(tlsNoneRes.status).toBe(200);
+    const tlsNoneJson = (await tlsNoneRes.json()) as {
+      execution: { sourceTransmission: string; aiInference: string };
+      aiAnalysis: {
+        status: string;
+        coverage: string;
+        errorCode?: string;
+        provenance: { gatewayVerification: string };
+      };
+    };
+    expect(tlsNoneJson.execution.sourceTransmission).toBe("none");
+    expect(tlsNoneJson.execution.aiInference).toBe("failed");
+    expect(tlsNoneJson.aiAnalysis.status).toBe("failed");
+    expect(tlsNoneJson.aiAnalysis.coverage).toBe("not_run");
+    expect(tlsNoneJson.aiAnalysis.errorCode).toBe("tls_binding_rejected");
+    expect(tlsNoneJson.aiAnalysis.provenance.gatewayVerification).toBe("failed");
+
+    // 2. Unexpected throw from adapter preserves attempted and never leaks secret text in HTTP 500
+    const throwServer = await startTestServer({
+      getAiConfig: () => ({
+        apiKey: "test-key",
+        composeHash: approved.composeHash,
+        osImageHash: approved.osImageHash,
+      }),
+      createAiAdapter: () => async (_snapshot, _findings, runOptions) => {
+        runOptions?.onSourceTransmission?.();
+        throw new ApiError(
+          {
+            code: "api.transport_failed",
+            details: { resource: "completion", reason: "request" },
+            retryable: true,
+          },
+          { cause: new Error("Authorization: Bearer super-secret-token-xyz") },
+        );
+      },
+    });
+
+    const rev2 = (await fetch(
+      `${throwServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+    };
+
+    const throwRes = await fetch(`${throwServer.baseUrl}/api/ai-review`, {
+      method: "POST",
+      headers: {
+        Origin: throwServer.origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: rev2.report.snapshot.sourceHash,
+        token: rev2.consentToken,
+      }),
+    });
+    expect(throwRes.status).toBe(500);
+    const throwBodyText = await throwRes.text();
+    expect(throwBodyText).not.toContain("super-secret-token-xyz");
+    expect(throwBodyText).not.toContain("Authorization:");
+    const throwJson = JSON.parse(throwBodyText) as {
+      error: string;
+      errorCode?: string;
+      execution: { aiInference: string; sourceTransmission: string };
+    };
+    expect(throwJson.errorCode).toBe("network_error");
+    expect(throwJson.execution.aiInference).toBe("failed");
+    expect(throwJson.execution.sourceTransmission).toBe("attempted");
   });
 });
 

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import {
   InferenceClient,
+  isApiError,
+  isVerificationError,
   type AttestationVerificationResult,
   type CompletionSignatureKind,
   type DeploymentPolicyParams,
@@ -27,8 +29,7 @@ import { validateEvidence } from "../source/validate-evidence.js";
 import { z } from "zod";
 
 export const NEAR_AI_MODEL_ID = "z-ai/glm-5.3-flash" as const;
-
-const SDK_VERSION = "0.3.0" as const;
+export const NEAR_AI_SDK_VERSION = "0.3.0" as const;
 const MAX_SOURCE_CONTEXT_BYTES = 256 * 1024;
 const MAX_PROMPT_BYTES = 320 * 1024;
 const MAX_COMPLETION_TOKENS = 4096;
@@ -98,8 +99,19 @@ export type PrivateModelPolicyStatus =
 
 export type SourceCoverageStatus = "complete" | "incomplete" | "not_run";
 
+export type NearAiErrorCode =
+  | "client_initialization_failed"
+  | "attestation_failed"
+  | "measurement_mismatch"
+  | "tls_binding_rejected"
+  | "auth_failed"
+  | "network_error"
+  | "response_verification_failed"
+  | "invalid_response"
+  | "inference_failed";
+
 export interface NearAiProvenance {
-  readonly sdkVersion: typeof SDK_VERSION;
+  readonly sdkVersion: typeof NEAR_AI_SDK_VERSION;
   readonly modelId: typeof NEAR_AI_MODEL_ID;
   readonly responseId?: string;
   readonly gatewayVerification: AnalysisResult["aiAnalysis"]["responseVerification"];
@@ -131,6 +143,7 @@ export interface NearAiAnalysisResult {
   readonly status: AnalysisResult["aiAnalysis"]["status"];
   readonly coverage: SourceCoverageStatus;
   readonly responseVerification: AnalysisResult["aiAnalysis"]["responseVerification"];
+  readonly errorCode?: NearAiErrorCode;
   readonly findings: readonly ImmutableFinding[];
   readonly evidence: readonly Readonly<Evidence>[];
   readonly evidenceExcerpts: readonly Readonly<AiEvidenceExcerpt>[];
@@ -193,7 +206,7 @@ function defaultClientFactory(
 
 function initialProvenance(): NearAiProvenance {
   return {
-    sdkVersion: SDK_VERSION,
+    sdkVersion: NEAR_AI_SDK_VERSION,
     modelId: NEAR_AI_MODEL_ID,
     gatewayVerification: "not_run",
     modelAttestationVerification: "not_run",
@@ -205,6 +218,7 @@ function initialProvenance(): NearAiProvenance {
 function buildResult(params: {
   status: AnalysisResult["aiAnalysis"]["status"];
   coverage: SourceCoverageStatus;
+  errorCode?: NearAiErrorCode;
   provenance: NearAiProvenance;
   limitations: readonly string[];
   findings?: readonly FindingInput[];
@@ -252,6 +266,7 @@ function buildResult(params: {
     status: params.status,
     coverage: params.coverage,
     responseVerification: provenance.responseVerification,
+    ...(params.errorCode === undefined ? {} : { errorCode: params.errorCode }),
     findings: Object.freeze(findings),
     evidence: Object.freeze(evidence),
     evidenceExcerpts: Object.freeze(evidenceExcerpts),
@@ -364,20 +379,52 @@ function isVerifiedModelAttestation(
   }
 }
 
+function isAttestedGatewayTlsBinding(value: unknown): boolean {
+  const tlsBinding = asRecord(value);
+  return (
+    tlsBinding !== undefined &&
+    tlsBinding.kind === "attested" &&
+    typeof tlsBinding.spkiFingerprint === "string" &&
+    tlsBinding.spkiFingerprint.trim().length > 0
+  );
+}
+
+function isGatewayAttestationShapeWithoutTlsPolicy(value: unknown): boolean {
+  try {
+    const attestation = asRecord(value);
+    return (
+      attestation !== undefined &&
+      isVerifiedAttestationEvidence(value) &&
+      asRecord(attestation.report) !== undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasRejectedGatewayTlsBinding(attestation: unknown): boolean {
+  try {
+    const result = asRecord(attestation);
+    if (result === undefined) {
+      return false;
+    }
+    return (
+      isGatewayAttestationShapeWithoutTlsPolicy(result.gateway) &&
+      !isAttestedGatewayTlsBinding(asRecord(result.gateway)?.tlsBinding)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isVerifiedGatewayAttestation(
   value: unknown,
 ): value is VerifiedGatewayAttestation {
   try {
     const attestation = asRecord(value);
-    const tlsBinding = asRecord(attestation?.tlsBinding);
     return (
-      attestation !== undefined &&
-      isVerifiedAttestationEvidence(value) &&
-      asRecord(attestation.report) !== undefined &&
-      tlsBinding !== undefined &&
-      (tlsBinding.kind === "none" ||
-        (tlsBinding.kind === "attested" &&
-          isNonEmptyString(tlsBinding.spkiFingerprint)))
+      isGatewayAttestationShapeWithoutTlsPolicy(value) &&
+      isAttestedGatewayTlsBinding(attestation?.tlsBinding)
     );
   } catch {
     return false;
@@ -518,6 +565,226 @@ function assertApprovedDeployment(
   }
 }
 
+const NETWORK_ERROR_CODES = new Set<string>([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ECONNABORTED",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+function hasCauseWithExactMessage(error: unknown, target: string): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
+    if (current instanceof Error) {
+      if (current.message === target) {
+        return true;
+      }
+      current = (current as { cause?: unknown }).cause;
+      continue;
+    }
+    break;
+  }
+  return false;
+}
+
+function hasNetworkErrorCode(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth += 1) {
+    if (typeof current === "object") {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === "string" && NETWORK_ERROR_CODES.has(code)) {
+        return true;
+      }
+      current = (current as { cause?: unknown }).cause;
+      continue;
+    }
+    break;
+  }
+  return false;
+}
+
+export interface SanitizedNearAiError {
+  readonly code: NearAiErrorCode;
+  readonly message: string;
+}
+
+export function classifyNearAiOperationalError(
+  error: unknown,
+  stage: "attestation" | "inference" | "response_verification",
+): SanitizedNearAiError {
+  if (
+    hasCauseWithExactMessage(error, "Model deployment is not approved.") ||
+    hasCauseWithExactMessage(error, "Model is not approved.")
+  ) {
+    return {
+      code: "measurement_mismatch",
+      message:
+        stage === "attestation"
+          ? "Model deployment measurements are not approved; inference was not sent."
+          : "Model deployment measurements are not approved; no AI findings were accepted.",
+    };
+  }
+
+  if (isVerificationError(error)) {
+    const failure = error.failure;
+    if (
+      failure.code === "binding.spki_fingerprint_required" ||
+      failure.code === "binding.spki_fingerprint_mismatch"
+    ) {
+      return {
+        code: "tls_binding_rejected",
+        message:
+          stage === "attestation"
+            ? "Gateway TLS SPKI binding verification failed; inference was not sent."
+            : "Gateway TLS SPKI pinning rejected the request; no AI findings were accepted.",
+      };
+    }
+
+    if (
+      failure.code === "policy.tcb_status_not_allowed" ||
+      failure.code === "policy.gpu_evidence_required" ||
+      failure.code === "policy.debug_enabled" ||
+      failure.code === "policy.model_attestation_required" ||
+      failure.code === "provenance.compose_file_hash_mismatch" ||
+      failure.code === "provenance.deployment_images_invalid" ||
+      failure.code === "measurement.event_log_invalid"
+    ) {
+      return {
+        code: "measurement_mismatch",
+        message:
+          stage === "attestation"
+            ? "Gateway or model attestation policy failed verification; inference was not sent."
+            : "Gateway or model attestation policy rejected the response; no AI findings were accepted.",
+      };
+    }
+
+    return {
+      code:
+        stage === "response_verification"
+          ? "response_verification_failed"
+          : "attestation_failed",
+      message:
+        stage === "response_verification"
+          ? "Response signature verification failed; no AI findings were accepted."
+          : stage === "inference"
+            ? "Confidential session verification failed; no AI findings were accepted."
+            : "Gateway or model attestation preflight failed; inference was not sent.",
+    };
+  }
+
+  if (isApiError(error)) {
+    const failure = error.failure;
+    if (failure.code === "api.http_status") {
+      if (failure.details.status === 401 || failure.details.status === 403) {
+        return {
+          code: "auth_failed",
+          message:
+            stage === "attestation"
+              ? "NEAR AI gateway authentication failed during preflight; inference was not sent."
+              : "NEAR AI gateway authentication failed; no AI findings were accepted.",
+        };
+      }
+      if (
+        failure.details.status === 408 ||
+        failure.details.status === 429 ||
+        failure.details.status >= 500
+      ) {
+        return {
+          code: "network_error",
+          message:
+            stage === "attestation"
+              ? "NEAR AI gateway returned a transient service error during preflight; inference was not sent."
+              : "NEAR AI gateway returned a transient service error; no AI findings were accepted.",
+        };
+      }
+    }
+
+    if (failure.code === "api.transport_failed") {
+      return {
+        code: "network_error",
+        message:
+          stage === "attestation"
+            ? "Network transport failed during attestation preflight; inference was not sent."
+            : "Network transport failed during the NEAR AI request; no AI findings were accepted.",
+      };
+    }
+
+    if (
+      failure.code === "api.invalid_json" ||
+      failure.code === "api.invalid_response"
+    ) {
+      return {
+        code: "invalid_response",
+        message:
+          stage === "attestation"
+            ? "NEAR AI returned a malformed attestation payload; inference was not sent."
+            : "NEAR AI returned a malformed response payload; no AI findings were accepted.",
+      };
+    }
+
+    if (stage === "response_verification") {
+      return {
+        code: "response_verification_failed",
+        message:
+          "Response signature verification failed; no AI findings were accepted.",
+      };
+    }
+
+    if (stage === "attestation") {
+      return {
+        code: "attestation_failed",
+        message:
+          "Gateway or model attestation preflight failed; inference was not sent.",
+      };
+    }
+
+    return {
+      code: "inference_failed",
+      message:
+        "The bounded inference request failed; no AI findings were accepted.",
+    };
+  }
+
+  if (hasNetworkErrorCode(error)) {
+    return {
+      code: "network_error",
+      message:
+        stage === "attestation"
+          ? "Network transport failed during attestation preflight; inference was not sent."
+          : "Network transport failed during the NEAR AI request; no AI findings were accepted.",
+    };
+  }
+
+  if (stage === "response_verification") {
+    return {
+      code: "response_verification_failed",
+      message:
+        "Response signature verification failed; no AI findings were accepted.",
+    };
+  }
+
+  if (stage === "attestation") {
+    return {
+      code: "attestation_failed",
+      message:
+        "Gateway or model attestation preflight failed; inference was not sent.",
+    };
+  }
+
+  return {
+    code: "inference_failed",
+    message:
+      "The bounded inference request failed; no AI findings were accepted.",
+  };
+}
+
 function createClientOptions(
   apiKey: string,
   approvedDeploymentKeys: ReadonlySet<string>,
@@ -536,6 +803,7 @@ function createClientOptions(
     e2ee: true,
     signingAlgo: "ed25519",
     gatewayVerification: {
+      includeSpkiFingerprint: true,
       policy: { acceptedTcbStatuses: ACCEPTED_TCB_STATUSES },
     },
     modelVerification: {
@@ -918,6 +1186,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "not_run",
+        errorCode: "client_initialization_failed",
         provenance: {
           ...provenance,
           privateModelPolicy: "unavailable",
@@ -931,18 +1200,36 @@ export function createNearAiAdapter(
     let attestation: unknown;
     try {
       attestation = await client.verify(NEAR_AI_MODEL_ID);
-    } catch {
+    } catch (error) {
+      const classified = classifyNearAiOperationalError(error, "attestation");
       return buildResult({
         status: "failed",
         coverage: "not_run",
+        errorCode: classified.code,
         provenance: {
           ...provenance,
-          gatewayVerification: "unavailable",
+          gatewayVerification:
+            classified.code === "tls_binding_rejected" ? "failed" : "unavailable",
+          modelAttestationVerification: "unavailable",
+          privateModelPolicy: "rejected",
+        },
+        limitations: [classified.message],
+      });
+    }
+
+    if (hasRejectedGatewayTlsBinding(attestation)) {
+      return buildResult({
+        status: "failed",
+        coverage: "not_run",
+        errorCode: "tls_binding_rejected",
+        provenance: {
+          ...provenance,
+          gatewayVerification: "failed",
           modelAttestationVerification: "unavailable",
           privateModelPolicy: "rejected",
         },
         limitations: [
-          "Gateway or model attestation preflight failed; inference was not sent.",
+          "Gateway TLS SPKI binding is missing, set to none, or malformed; inference was not sent.",
         ],
       });
     }
@@ -951,6 +1238,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "not_run",
+        errorCode: "attestation_failed",
         provenance: {
           ...provenance,
           gatewayVerification: "unavailable",
@@ -983,6 +1271,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "not_run",
+        errorCode: "measurement_mismatch",
         provenance: {
           ...provenance,
           gatewayVerification: "failed",
@@ -998,6 +1287,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "not_run",
+        errorCode: "attestation_failed",
         provenance: {
           ...provenance,
           modelAttestationVerification: "failed",
@@ -1018,6 +1308,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "not_run",
+        errorCode: "measurement_mismatch",
         provenance: {
           ...provenance,
           modelAttestationVerification: "failed",
@@ -1043,6 +1334,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "not_run",
+        errorCode: "attestation_failed",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1064,17 +1356,22 @@ export function createNearAiAdapter(
         stream: false,
         messages,
       });
-    } catch {
+    } catch (error) {
+      const classified = classifyNearAiOperationalError(error, "inference");
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: classified.code,
         provenance: {
           ...provenance,
-          privateModelPolicy: "unavailable",
+          privateModelPolicy:
+            classified.code === "measurement_mismatch" ||
+            classified.code === "tls_binding_rejected" ||
+            classified.code === "attestation_failed"
+              ? "rejected"
+              : "unavailable",
         },
-        limitations: [
-          "The bounded inference request failed; no AI findings were accepted.",
-        ],
+        limitations: [classified.message],
       });
     }
 
@@ -1083,6 +1380,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "invalid_response",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1097,18 +1395,21 @@ export function createNearAiAdapter(
     let verified: unknown;
     try {
       verified = await client.verifyResponse(responseId);
-    } catch {
+    } catch (error) {
+      const classified = classifyNearAiOperationalError(
+        error,
+        "response_verification",
+      );
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: classified.code,
         provenance: {
           ...provenance,
           responseVerification: "failed",
           privateModelPolicy: "rejected",
         },
-        limitations: [
-          "Response signature verification failed; no AI findings were accepted.",
-        ],
+        limitations: [classified.message],
       });
     }
 
@@ -1116,6 +1417,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "response_verification_failed",
         provenance: {
           ...provenance,
           responseVerification: "failed",
@@ -1137,6 +1439,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "response_verification_failed",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1151,6 +1454,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "response_verification_failed",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1162,7 +1466,6 @@ export function createNearAiAdapter(
     }
 
     if (
-      verified.signatureKind !== "provider_tee" ||
       !verified.attestations.every((model) =>
         isApprovedModelAttestation(model, approvedDeploymentKeys),
       ) ||
@@ -1174,6 +1477,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "measurement_mismatch",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1191,6 +1495,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "invalid_response",
         provenance,
         limitations: [
           "The verified response did not contain a non-empty text completion; no AI findings were accepted.",
@@ -1205,6 +1510,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "invalid_response",
         provenance,
         limitations: [
           "The verified model output was not valid JSON; no AI findings were accepted.",
@@ -1217,6 +1523,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "invalid_response",
         provenance,
         limitations: [
           "The verified model output did not match the strict AI finding schema; no AI findings were accepted.",
@@ -1235,6 +1542,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "invalid_response",
         provenance,
         limitations: [
           "At least one AI finding referenced a noncanonical, out-of-snapshot, or out-of-range source location; no AI findings were accepted.",
@@ -1246,6 +1554,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "invalid_response",
         provenance,
         limitations: [
           "The AI output contains duplicate source ranges; no AI findings were accepted.",
@@ -1270,6 +1579,7 @@ export function createNearAiAdapter(
         return buildResult({
           status: "failed",
           coverage: "incomplete",
+          errorCode: "invalid_response",
           provenance,
           limitations: [
             "Generated AI evidence contains a duplicate reference; no AI findings were accepted.",
@@ -1281,6 +1591,7 @@ export function createNearAiAdapter(
         return buildResult({
           status: "failed",
           coverage: "incomplete",
+          errorCode: "invalid_response",
           provenance,
           limitations: [
             "Locally generated AI evidence failed snapshot validation; no AI findings were accepted.",
@@ -1306,6 +1617,7 @@ export function createNearAiAdapter(
       return buildResult({
         status: "failed",
         coverage: "incomplete",
+        errorCode: "invalid_response",
         provenance,
         limitations: [
           "AI evidence references did not integrate completely; no AI findings were accepted.",

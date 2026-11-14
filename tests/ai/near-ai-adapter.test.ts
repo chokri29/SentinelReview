@@ -1,6 +1,9 @@
+import { ApiError, VerificationError } from "@nearai/inference-sdk/node";
 import { describe, expect, it, vi } from "vitest";
 import {
+  classifyNearAiOperationalError,
   createNearAiAdapter,
+  NEAR_AI_SDK_VERSION,
   type NearAiClient,
 } from "../../src/ai/near-ai-adapter.js";
 import { runNearRustCallbackPrivateRule } from "../../src/rules/near-rust-callback-private.js";
@@ -51,7 +54,10 @@ function makeGatewayAttestation(overrides: Record<string, unknown> = {}) {
     },
     deploymentProvenance: "verified",
     report: { mrtd: "ok" },
-    tlsBinding: { kind: "none" },
+    tlsBinding: {
+      kind: "attested",
+      spkiFingerprint: "gateway-spki-fp-1",
+    },
     ...overrides,
   };
 }
@@ -358,6 +364,7 @@ describe("createNearAiAdapter policy and verification", () => {
     expect(transmitted).toBe(true);
     expect(res.status).toBe("complete");
     expect(res.coverage).toBe("complete");
+    expect(res.provenance.sdkVersion).toBe(NEAR_AI_SDK_VERSION);
     expect(res.provenance.privateModelPolicy).toBe("passed");
     expect(res.provenance.responseVerification).toBe("verified");
     expect(res.findings).toHaveLength(1);
@@ -474,5 +481,222 @@ describe("createNearAiAdapter policy and verification", () => {
     );
     expect(badJsonRes.status).toBe("failed");
     expect(badJsonRes.coverage).toBe("incomplete");
+    expect(badJsonRes.errorCode).toBe("invalid_response");
+  });
+
+  it("requires includeSpkiFingerprint and rejects none, missing, empty, or malformed gateway TLS bindings", async () => {
+    const snapshot = makeSampleSnapshot();
+    const rule = runNearRustCallbackPrivateRule(snapshot);
+    const modelAtt = makeModelAttestation();
+    let capturedOptions: unknown;
+
+    const rejectedBindings: unknown[] = [
+      { kind: "none" },
+      undefined,
+      { kind: "attested" },
+      { kind: "attested", spkiFingerprint: "" },
+      { kind: "attested", spkiFingerprint: "   " },
+      "malformed",
+      {},
+    ];
+
+    for (const tlsBinding of rejectedBindings) {
+      const createChatCompletion = vi.fn();
+      let transmitted = false;
+      const gatewayWithBinding = makeGatewayAttestation();
+      if (tlsBinding === undefined) {
+        delete (gatewayWithBinding as Record<string, unknown>).tlsBinding;
+      } else {
+        (gatewayWithBinding as Record<string, unknown>).tlsBinding = tlsBinding;
+      }
+
+      const adapter = createNearAiAdapter({
+        approvedModelDeployments: [APPROVED_DEPLOYMENT],
+        getApiKey: () => "test-key",
+        createClient: (options) => {
+          capturedOptions = options;
+          return {
+            verify: async () => ({
+              gateway: gatewayWithBinding,
+              models: [modelAtt],
+              verifiedAt: Date.now(),
+            }),
+            createChatCompletion,
+            verifyResponse: vi.fn(),
+          };
+        },
+      });
+
+      const res = await adapter(snapshot, rule.deterministicAnalysis.findings, {
+        onSourceTransmission: () => {
+          transmitted = true;
+        },
+      });
+
+      expect(
+        (
+          capturedOptions as {
+            gatewayVerification?: { includeSpkiFingerprint?: boolean };
+          }
+        )?.gatewayVerification?.includeSpkiFingerprint,
+      ).toBe(true);
+      expect(res.status).toBe("failed");
+      expect(res.coverage).toBe("not_run");
+      expect(res.errorCode).toBe("tls_binding_rejected");
+      expect(res.provenance.gatewayVerification).toBe("failed");
+      expect(res.provenance.privateModelPolicy).toBe("rejected");
+      expect(transmitted).toBe(false);
+      expect(createChatCompletion).not.toHaveBeenCalled();
+    }
+  });
+
+  it("classifies SDK and operational failures into sanitized error codes without guessing auth_failed or leaking raw error text", async () => {
+    const snapshot = makeSampleSnapshot();
+    const rule = runNearRustCallbackPrivateRule(snapshot);
+    const modelAtt = makeModelAttestation();
+
+    // 1. client_initialization_failed (raw error message with secret never leaked)
+    const initFailAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "secret-api-key-should-not-leak",
+      createClient: () => {
+        throw new Error(
+          "Authorization: Bearer secret-api-key-should-not-leak failed",
+        );
+      },
+    });
+    const initFailRes = await initFailAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+    );
+    expect(initFailRes.errorCode).toBe("client_initialization_failed");
+    expect(initFailRes.coverage).toBe("not_run");
+    expect(initFailRes.limitations.join(" ")).not.toContain("secret-api-key");
+
+    // 2. auth_failed ONLY for HTTP 401/403 ApiError, never guessed for generic errors
+    const auth401 = new ApiError({
+      code: "api.http_status",
+      details: { resource: "completion", status: 401 },
+      retryable: false,
+    });
+    expect(classifyNearAiOperationalError(auth401, "inference").code).toBe(
+      "auth_failed",
+    );
+
+    const auth403 = new ApiError({
+      code: "api.http_status",
+      details: { resource: "gateway_attestation", status: 403 },
+      retryable: false,
+    });
+    expect(classifyNearAiOperationalError(auth403, "attestation").code).toBe(
+      "auth_failed",
+    );
+
+    const genericUnauthorized = new Error(
+      "unauthorized token=raw-secret-value-999",
+    );
+    const genericClassified = classifyNearAiOperationalError(
+      genericUnauthorized,
+      "inference",
+    );
+    expect(genericClassified.code).toBe("inference_failed");
+    expect(genericClassified.message).not.toContain("raw-secret-value-999");
+
+    // 3. network_error for transport failure, 5xx ApiError, and Node network error code
+    const transportErr = new ApiError({
+      code: "api.transport_failed",
+      details: { resource: "completion", reason: "request" },
+      retryable: true,
+    });
+    expect(classifyNearAiOperationalError(transportErr, "inference").code).toBe(
+      "network_error",
+    );
+
+    const server503 = new ApiError({
+      code: "api.http_status",
+      details: { resource: "completion", status: 503 },
+      retryable: true,
+    });
+    expect(classifyNearAiOperationalError(server503, "inference").code).toBe(
+      "network_error",
+    );
+
+    const nodeConnRefused = Object.assign(
+      new Error("connect ECONNREFUSED 127.0.0.1:443"),
+      { code: "ECONNREFUSED" },
+    );
+    expect(
+      classifyNearAiOperationalError(nodeConnRefused, "attestation").code,
+    ).toBe("network_error");
+
+    // 4. VerificationError SPKI mismatch -> tls_binding_rejected
+    const spkiMismatch = new VerificationError({
+      code: "binding.spki_fingerprint_mismatch",
+    });
+    expect(classifyNearAiOperationalError(spkiMismatch, "attestation").code).toBe(
+      "tls_binding_rejected",
+    );
+
+    // 5. VerificationError TCB disallowed -> measurement_mismatch
+    const tcbRejected = new VerificationError({
+      code: "policy.tcb_status_not_allowed",
+      details: {
+        actual: "OutOfDate",
+        accepted: ["UpToDate"],
+        advisoryIds: [],
+      },
+    });
+    expect(classifyNearAiOperationalError(tcbRejected, "attestation").code).toBe(
+      "measurement_mismatch",
+    );
+
+    // 6. ApiError invalid_json -> invalid_response; response verification error -> response_verification_failed
+    const invalidJsonErr = new ApiError({
+      code: "api.invalid_json",
+      details: { resource: "completion" },
+    });
+    expect(classifyNearAiOperationalError(invalidJsonErr, "inference").code).toBe(
+      "invalid_response",
+    );
+
+    const sigErr = new VerificationError({ code: "ohttp.signature_invalid" });
+    expect(
+      classifyNearAiOperationalError(sigErr, "response_verification").code,
+    ).toBe("response_verification_failed");
+
+    // 7. End-to-end adapter rejection on 401 ApiError during completion
+    const authFailAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "sk-live-secret-12345",
+      createClient: () => ({
+        verify: async () => ({
+          gateway: makeGatewayAttestation(),
+          models: [modelAtt],
+          verifiedAt: Date.now(),
+        }),
+        createChatCompletion: async () => {
+          throw new ApiError(
+            {
+              code: "api.http_status",
+              details: { resource: "completion", status: 401 },
+              retryable: false,
+            },
+            { cause: new Error("Bearer sk-live-secret-12345 rejected") },
+          );
+        },
+        verifyResponse: vi.fn(),
+      }),
+    });
+
+    const authFailRes = await authFailAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+    );
+    expect(authFailRes.status).toBe("failed");
+    expect(authFailRes.coverage).toBe("incomplete");
+    expect(authFailRes.errorCode).toBe("auth_failed");
+    expect(authFailRes.limitations.join(" ")).not.toContain(
+      "sk-live-secret-12345",
+    );
   });
 });

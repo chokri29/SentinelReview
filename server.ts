@@ -10,8 +10,10 @@ import express, {
 } from "express";
 import { z } from "zod";
 import {
+  classifyNearAiOperationalError,
   createNearAiAdapter,
   NEAR_AI_MODEL_ID,
+  NEAR_AI_SDK_VERSION,
   type NearAiAnalysisResult,
 } from "./src/ai/near-ai-adapter.js";
 import {
@@ -265,7 +267,7 @@ export async function createApp(
   function modelConfigFingerprint(): string {
     const cfg = getAiConfig();
     const config = {
-      sdkVersion: "0.3.0",
+      sdkVersion: NEAR_AI_SDK_VERSION,
       modelId: NEAR_AI_MODEL_ID,
       composeHash: cfg.composeHash ?? null,
       osImageHash: cfg.osImageHash ?? null,
@@ -572,9 +574,14 @@ export async function createApp(
         },
         aiAnalysis: aiResult,
       });
-    } catch {
+    } catch (error) {
+      const sanitized = classifyNearAiOperationalError(error, "inference");
+      console.error(
+        `[SentinelReview] Optional NEAR AI review failed (code=${sanitized.code}).`,
+      );
       res.status(500).json({
-        error: "The optional NEAR AI review failed.",
+        error: sanitized.message,
+        errorCode: sanitized.code,
         execution: { aiInference: "failed", sourceTransmission },
       });
     }

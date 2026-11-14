@@ -291,14 +291,28 @@ export function NearAiPanel({
                 </div>
               </div>
 
-              {matchingAiResponse.aiAnalysis.limitations.length > 0 && (
+              {(matchingAiResponse.aiAnalysis.limitations.length > 0 ||
+                matchingAiResponse.aiAnalysis.errorCode) && (
                 <div className="rounded-lg border border-slate-800 bg-[#111A2E] p-3.5 text-xs text-slate-300">
-                  <div className="font-medium text-slate-100">Limitations & status notes</div>
-                  <ul className="mt-1.5 space-y-1 text-slate-400">
-                    {matchingAiResponse.aiAnalysis.limitations.map((item, index) => (
-                      <li key={index}>{item}</li>
-                    ))}
-                  </ul>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium text-slate-100">
+                      Limitations & status notes
+                    </span>
+                    {matchingAiResponse.aiAnalysis.errorCode && (
+                      <span className="font-mono text-xs text-rose-400">
+                        code: {matchingAiResponse.aiAnalysis.errorCode}
+                      </span>
+                    )}
+                  </div>
+                  {matchingAiResponse.aiAnalysis.limitations.length > 0 && (
+                    <ul className="mt-1.5 space-y-1 text-slate-400">
+                      {matchingAiResponse.aiAnalysis.limitations.map(
+                        (item, index) => (
+                          <li key={index}>{item}</li>
+                        ),
+                      )}
+                    </ul>
+                  )}
                 </div>
               )}
 

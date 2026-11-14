@@ -44,9 +44,10 @@ When running in Google AI Studio, the Express backend is hosted remotely on the 
 Configure secrets only in the server environment (see `.env.example` — never commit real `.env` files or secrets):
 
 - `NEARAI_API_KEY`: Optional NEAR AI API key for gated hypothesis inference.
-- `NEARAI_OPERATOR_APPROVED_MODEL_ID`: Optional model identifier note. (The adapter pins `z-ai/glm-5.3-flash`.)
 - `NEARAI_OPERATOR_APPROVED_COMPOSE_HASH`: Required compose measurement hash to enable NEAR AI inference.
 - `NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH`: Required OS image measurement hash to enable NEAR AI inference.
+
+Note: The model ID (`z-ai/glm-5.3-flash`) is deliberately hardcoded in the adapter (`src/ai/near-ai-adapter.ts`) and is not configurable via environment variables.
 
 ### Commands
 

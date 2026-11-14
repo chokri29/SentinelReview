@@ -123,6 +123,17 @@ export interface ReviewResponse {
   };
 }
 
+export type NearAiErrorCode =
+  | "client_initialization_failed"
+  | "attestation_failed"
+  | "measurement_mismatch"
+  | "tls_binding_rejected"
+  | "auth_failed"
+  | "network_error"
+  | "response_verification_failed"
+  | "invalid_response"
+  | "inference_failed";
+
 export interface AiAnalysisResponse {
   sourceKind: SourceKind;
   fixture?: FixtureName;
@@ -140,6 +151,7 @@ export interface AiAnalysisResponse {
     status: "complete" | "partial" | "failed" | "not_run";
     coverage: "complete" | "incomplete" | "not_run";
     responseVerification: string;
+    errorCode?: NearAiErrorCode;
     findings: {
       findingId: string;
       origin: string;
