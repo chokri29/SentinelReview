@@ -311,7 +311,11 @@ const dashboardPath = fileURLToPath(new URL("../dashboard/index.html", import.me
 const server = createServer(async (request, response) => {
   const requestUrl = new URL(request.url ?? "/", ORIGIN);
 
-  if (request.method === "GET" && requestUrl.pathname === "/") {
+  if (requestUrl.pathname === "/") {
+    if (request.method !== "GET") {
+      send(response, 405, "text/plain; charset=utf-8", "Method not allowed");
+      return;
+    }
     try {
       const html = await readFile(dashboardPath, "utf8");
       send(response, 200, "text/html; charset=utf-8", html);
@@ -321,7 +325,11 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "GET" && requestUrl.pathname === "/api/review") {
+  if (requestUrl.pathname === "/api/review") {
+    if (request.method !== "GET") {
+      send(response, 405, "text/plain; charset=utf-8", "Method not allowed");
+      return;
+    }
     const requestedFixture = requestUrl.searchParams.get("fixture") ?? "triggering";
     if (!isFixtureName(requestedFixture)) {
       sendJson(response, 400, { error: "fixture must be triggering or safe" });
@@ -358,15 +366,15 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "POST" && requestUrl.pathname === "/api/ai-review") {
+  if (requestUrl.pathname === "/api/ai-review") {
+    if (request.method !== "POST") {
+      send(response, 405, "text/plain; charset=utf-8", "Method not allowed");
+      return;
+    }
     await handleAiReview(request, response);
     return;
   }
 
-  if (request.method !== "GET" && request.method !== "POST") {
-    send(response, 405, "text/plain; charset=utf-8", "Method not allowed");
-    return;
-  }
   send(response, 404, "text/plain; charset=utf-8", "Not found");
 });
 
