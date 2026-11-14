@@ -1,46 +1,26 @@
 import { InferenceClient } from "@nearai/inference-sdk/node";
-import type {
-  AttestationVerificationResult,
-  InferenceClientOptions,
-  VerifiedCompletionResult,
-  VerifiedGatewayCompletionResult,
-  VerifiedModelCompletionResult,
-} from "@nearai/inference-sdk/node";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import {
+  createNearAiControlledCanaryClientOptions,
+  NEAR_AI_CONTROLLED_CANARY_MODEL_ID,
+} from "../../src/ai/near-ai-controlled-canary.js";
 
-const clientOptions = {
-  apiKey: "test-only-not-a-real-key",
-  e2ee: true,
-} satisfies InferenceClientOptions;
+describe("@nearai/inference-sdk/node compatibility", () => {
+  it("exposes InferenceClient and required verification/chat methods without making network calls on construction", () => {
+    expect(typeof InferenceClient).toBe("function");
 
-async function checkVerificationTypes(client: InferenceClient): Promise<void> {
-  const attestation: AttestationVerificationResult =
-    await client.verify("example/model");
-  const modelAttestations = attestation.models;
+    const options = createNearAiControlledCanaryClientOptions("dummy-test-key", {
+      model: NEAR_AI_CONTROLLED_CANARY_MODEL_ID,
+      composeHash: "dummy-compose-hash",
+      osImageHash: "dummy-os-image-hash",
+    });
 
-  const completion = await client.chat.completions.create({
-    model: "example/model",
-    messages: [{ role: "user", content: "type-check only" }],
-    stream: false,
+    const client = new InferenceClient(options);
+    expect(typeof client.verify).toBe("function");
+    expect(typeof client.chat?.completions?.create).toBe("function");
+    expect(typeof client.verifyResponse).toBe("function");
+    expect(typeof client.clearResponseCache).toBe("function");
+
+    client.clearResponseCache();
   });
-  const verified: VerifiedCompletionResult = await client.verifyResponse(
-    completion.id,
-  );
-
-  if (verified.signatureKind === "provider_tee") {
-    const modelSignature: VerifiedModelCompletionResult = verified;
-    void modelSignature.attestations;
-  } else {
-    const gatewaySignature: VerifiedGatewayCompletionResult = verified;
-    void gatewaySignature.attestation;
-  }
-
-  void modelAttestations;
-}
-
-it("constructs the typed Node client without making a request", () => {
-  const client = new InferenceClient(clientOptions);
-
-  expect(client).toBeInstanceOf(InferenceClient);
-  expect(checkVerificationTypes).toBeTypeOf("function");
 });

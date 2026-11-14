@@ -1,10 +1,11 @@
-import type { Evidence } from "../contracts/v1.js";
+import type { Evidence, SourceManifest } from "../contracts/v1.js";
 import type { SourceLoadResult } from "../source/load-source.js";
 import {
   integrateEvidence,
   type EvidenceIntegrationStatus,
   type FindingEvidenceReferenceStatus,
 } from "../source/integrate-evidence.js";
+import type { EvidenceValidationChecks } from "../source/validate-evidence.js";
 import {
   runNearRustCallbackPrivateRule,
   type NearRustCallbackPrivateRuleResult,
@@ -17,20 +18,28 @@ export interface DeterministicDemoReport {
     readonly sourceHash: string;
     readonly fileManifestHash: string;
     readonly fileCount: number;
+    readonly files: readonly Readonly<SourceManifest["files"][number]>[];
   };
   readonly deterministicRule: {
     readonly id: "NEAR-RUST-CALLBACK-PRIVATE-001";
     readonly status: "finding" | "passed" | "inconclusive";
     readonly findingCount: number;
+    readonly toolchain: readonly string[];
     readonly limitations: readonly string[];
   };
   readonly evidenceIntegration: {
     readonly status: EvidenceIntegrationStatus;
     readonly evidence: readonly {
       readonly evidenceId: string;
+      readonly path: string;
+      readonly startLine: number;
+      readonly endLine: number;
+      readonly sourceHash: string;
+      readonly excerptHash?: string;
       readonly declaredValidationStatus: Evidence["validationStatus"] | "not_available";
       readonly computedValidationStatus: EvidenceValidationStatus;
       readonly presentedAsValidated: boolean;
+      readonly checks: Readonly<EvidenceValidationChecks>;
       readonly issues: readonly string[];
     }[];
     readonly issues: readonly {
@@ -112,10 +121,18 @@ export function buildDeterministicDemoReport(
         ruleResult.evidence[index]?.validationStatus ?? "not_available";
       return {
         evidenceId: record.evidenceId,
+        path: record.path,
+        startLine: record.startLine,
+        endLine: record.endLine,
+        sourceHash: record.sourceHash,
+        ...(record.excerptHash === undefined
+          ? {}
+          : { excerptHash: record.excerptHash }),
         declaredValidationStatus,
         computedValidationStatus: validation.status,
         presentedAsValidated:
           validation.status === "validated" && integration.status !== "invalid",
+        checks: validation.checks,
         issues: validation.issues.map((issue) => issue.code),
       };
     },
@@ -148,11 +165,13 @@ export function buildDeterministicDemoReport(
       sourceHash: snapshot.manifest.sourceHash,
       fileManifestHash: snapshot.manifest.fileManifestHash,
       fileCount: snapshot.files.length,
+      files: snapshot.manifest.files,
     }),
     deterministicRule: Object.freeze({
       id: "NEAR-RUST-CALLBACK-PRIVATE-001",
       status: ruleResult.deterministicAnalysis.status,
       findingCount: ruleResult.deterministicAnalysis.findings.length,
+      toolchain: Object.freeze([...ruleResult.deterministicAnalysis.toolchain]),
       limitations: Object.freeze([...ruleResult.limitations]),
     }),
     evidenceIntegration: Object.freeze({
