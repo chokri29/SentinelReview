@@ -8,13 +8,12 @@
 <p align="center">
   <img src="./public/imagesr.jpg" width="100%" alt="SentinelReview dashboard">
 </p>
-
 <p align="center">
   <a href="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml">
     <img src="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml/badge.svg?branch=main" alt="GitHub Actions CI">
   </a>
   <a href="#running-locally">
-    <img src="https://img.shields.io/badge/Try%20it%20Running%20locally-00C08B" alt="Try it Running locally">
+    <img src="https://img.shields.io/badge/Try%20it-Running%20locally-00C08B?labelColor=black" alt="Try it Running locally">
   </a>
   <a href="https://nodejs.org/en/download/" title="Download Node.js">
     <img src="https://img.shields.io/badge/runtime-Node.js%2024+-339933?logo=node.js&logoColor=white" alt="Node.js 24 or newer">
