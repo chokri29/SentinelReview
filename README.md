@@ -6,6 +6,10 @@
 </p>
 
 <p align="center">
+  <img src="./public/imagesr.jpg" width="100%" alt="SentinelReview dashboard">
+</p>
+
+<p align="center">
   <a href="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml">
     <img src="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml/badge.svg?branch=main" alt="GitHub Actions CI">
   </a>
