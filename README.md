@@ -1,346 +1,312 @@
-# Sentinel Review
+# SentinelReview
 
 <p align="center">
-  <img src="https://github.com/chokri29/SentinelReview/blob/main/dashboard/imgSR.jpg" width="100%">
+  <strong>NEAR Rust Smart-Contract Review Workbench</strong><br>
+  Deterministic source analysis · Reproducible evidence · Consent-gated AI hypotheses
 </p>
 
 <p align="center">
-  <a href="#judge-quick-start">
-    <img src="https://img.shields.io/badge/run%20local%20demo-quick%20start-2563eb?style=for-the-badge" alt="Run the local demo">
-  </a>
-  &nbsp;&nbsp;
-  <a href="./LICENSE">
-    <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=for-the-badge" alt="License">
-  </a>
-  &nbsp;&nbsp;
   <a href="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/badge/CI-passing-28a745?style=for-the-badge&logo=githubactions&logoColor=white" alt="CI workflow">
+    <img src="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml/badge.svg?branch=main" alt="GitHub Actions CI">
   </a>
+  <a href="https://github.com/chokri29/SentinelReview">
+    <img src="https://img.shields.io/badge/platform-NEAR%20%7C%20Rust-00C08B" alt="NEAR and Rust">
+  </a>
+  <img src="https://img.shields.io/badge/runtime-Node.js%2024+-339933?logo=node.js&logoColor=white" alt="Node.js 24 or newer">
 </p>
 
-<p align="center">
-  <strong>A deterministic evidence-verification foundation for NEAR Rust smart-contract review.</strong><br>
-  Local source analysis · Reproducible evidence · Explicit trust boundaries
-</p>
+> **Scope:** SentinelReview is an experimental review workbench that supports security investigation and human review. It is not a complete security audit, an exploitability oracle, or a smart-contract safety certification.
 
-> **Project status:** early-stage research and hackathon prototype. SentinelReview supports investigation and human review. It is not a complete security audit, an exploitability oracle, or a contract safety certification.
+## What SentinelReview does
 
-## Judge quick start
+Smart-contract reviewers need more than an AI-generated explanation: they need to know which exact source was analyzed, which deterministic checks ran, and whether the evidence shown in a report can be recomputed against that source.
 
-1. **Use Node.js 24.22.2** (the version used by CI). With nvm: `nvm install 24.22.2 && nvm use 24.22.2`. With fnm: `fnm install 24.22.2 && fnm use 24.22.2`.
-2. **Clone the public repository:** `git clone https://github.com/chokri29/SentinelReview.git`
-3. **Enter the project and install the locked dependencies:** `cd SentinelReview && npm ci`.
-4. **Start the local dashboard:** `npm run dashboard`.
-5. **Open** [http://127.0.0.1:4173](http://127.0.0.1:4173) **on the same machine**. The Callback candidate fixture should show one informational review candidate and its evidence details.
-6. **Switch to Safe example.** The `#[private]` fixture should emit no candidate from this rule, while the dashboard explicitly warns that this is not a safety certification.
-7. **Optional AI path:** inspect the separate NEAR AI panel. It remains unused unless you check the explicit authorization box and click its action. Do not authorize transmission unless you intend to send the full displayed source snapshot to the configured model.
+SentinelReview combines a bounded Rust source-ingestion pipeline, a narrow deterministic NEAR callback-privacy rule, source-linked evidence validation, and two optional AI hypothesis providers. Its central principle is:
 
-The dashboard defaults to a local deterministic review. Its separate NEAR AI panel remains inactive unless a user explicitly authorizes transmission of the displayed full source snapshot; attestation and operator-approved measurements must also pass. For typechecking, the full test suite, and the detailed architecture, continue to [Quick start and step-by-step testing](#quick-start-and-step-by-step-testing).
+**AI proposes hypotheses → deterministic checks and evidence recomputation decide what is reproducible → human reviewers interpret the result.**
+
+The deterministic pipeline runs independently of AI providers. NEAR AI and Meta Model API are separate, optional paths; neither can turn an AI hypothesis into a deterministic finding.
 
 ## At a glance
 
-SentinelReview loads a bounded Rust source snapshot, runs a narrow deterministic NEAR callback-privacy rule, recomputes evidence against that exact snapshot, and produces a structured report. A local dashboard presents the report without changing the analysis.
-
-| Capability | What it does | What it does not claim |
+| Capability | What it does | Important boundary |
 |---|---|---|
-| Bounded source ingestion | Loads `.rs` files, rejects unsafe filesystem conditions, and creates immutable snapshot data and SHA-256 manifest fingerprints | Does not establish who authored the source or prove its provenance |
-| Deterministic rule | Checks one narrowly scoped NEAR Rust callback-result privacy pattern | Does not perform a complete Rust, NEAR, dependency, or business-logic audit |
-| Evidence validation | Recomputes source/manifest identity, file reference, line range, and optional excerpt-hash correspondence | Does not prove a finding is exploitable or that source is safe |
-| Evidence integration | Resolves finding references and reports complete, partial, or invalid integration | Does not turn a producer-declared status into trusted evidence |
-| Local dashboard | Displays the deterministic report and offers a separate, explicit-consent NEAR AI hypothesis path | Does not run AI by default, accept browser-supplied source, or expose a hosted review service |
-| Optional NEAR AI adapter | Provides a separate, gated inference path for hypotheses and verification metadata | Does not replace deterministic checks or treat AI hypotheses as confirmed vulnerabilities |
+| Rust source input | Reviews bundled fixtures or user-supplied Rust `.rs` files through the workbench | Custom source is sent to the SentinelReview application backend for deterministic processing; it is not processed solely in the browser |
+| Bounded source snapshot | Validates canonical paths, UTF-8, file counts and byte limits; creates an immutable snapshot | A source hash identifies the analyzed bytes; it does not prove authorship or provenance |
+| Deterministic NEAR rule | Detects a narrowly scoped callback-result privacy pattern | Not a general Rust analyzer or complete vulnerability scanner |
+| Evidence validation | Recomputes source/manifest identity, file references, line bounds and excerpt-hash correspondence | Evidence correspondence does not prove exploitability or source safety |
+| NEAR AI | Optional, explicit-consent hypothesis analysis with SDK-backed attestation and response-verification checks | Source is transmitted to the configured NEAR AI service after authorization; verification does not prove the model's conclusions are correct |
+| Meta Model API | Optional, separately consented hypothesis analysis for bundled public/synthetic fixtures only | Custom or private source is rejected server-side; this provider path is not TEE-attested and its output is not cryptographically verified |
+| Verification ledger and source viewer | Shows pipeline stages, findings, evidence status, source excerpts and verification metadata | A successful individual check must not be interpreted as a complete audit pass |
 
-## Architecture
+## Current application architecture
+
+The current product is the Express + Vite + React workbench. The older standalone `dashboard/` application and its port-4173 demo workflow are not the current application entry point.
 
 ### System overview
 
-The central trust boundary is:
-
-**AI may propose hypotheses → deterministic checks and evidence validation decide what is reproducible → people interpret the result.**
-
-The dashboard defaults to the local deterministic path. A separate user-confirmed action can request optional NEAR AI analysis; the result remains separate from deterministic findings.
-
 ```mermaid
 flowchart TD
-    A["Rust source directory / bundled fixture"] --> B["Bounded source loader"]
-    B --> C["Immutable source snapshot"]
-    C --> D["Deterministic NEAR callback-privacy rule"]
-    D --> E["Candidate findings + evidence records"]
-    E --> F["Evidence validator"]
-    C --> F
-    F --> G["Evidence integration and reference resolution"]
-    G --> H["Structured deterministic report"]
-    H --> I["Local HTTP dashboard"]
-    I --> J["Findings, evidence, excerpts, hashes, limitations"]
+    A["Browser: SentinelReview workbench"] --> B["Express API + Vite application"]
+    B --> C["Bundled fixture or custom Rust input"]
+    C --> D["Bounded snapshot creation"]
+    D --> E["Immutable source snapshot + SHA-256 hashes"]
+    E --> F["Deterministic NEAR callback-privacy rule"]
+    F --> G["Candidate findings + evidence records"]
+    G --> H["Evidence validation and integration"]
+    E --> H
+    H --> I["Deterministic review report"]
+    I --> J["Dashboard: findings, evidence, source, verification ledger"]
 
-    K["Optional NEAR AI adapter"] -. "separate, gated hypothesis path" .-> L["AI candidate + attestation / response checks"]
-    C -. "only when explicitly configured" .-> K
-    L -. "schema and source-evidence checks" .-> F
+    E -. "separate path; explicit consent" .-> K["NEAR AI adapter"]
+    K -.-> L["NEAR AI inference + attestation / response checks"]
+    L -. "hypotheses only" .-> J
+
+    C -. "bundled public/synthetic fixtures only" .-> M["Meta Model adapter"]
+    M -. "separate consent; server-side fixture restriction" .-> N["Meta Model API"]
+    N -. "unverified hypotheses only" .-> J
 ```
 
-The dotted AI path is separate from the deterministic report. The dashboard invokes it only after an explicit, snapshot-bound user confirmation and only when the configured attestation and measurement policy passes.
+The dotted paths are optional and separate from deterministic findings. The NEAR AI and Meta Model API integrations have different trust properties and must not be presented as equivalent verification mechanisms.
 
 ### Deterministic review sequence
 
 ```mermaid
 sequenceDiagram
-    participant CLI as Demo CLI / Dashboard server
-    participant Loader as Source loader
+    participant User
+    participant UI as React workbench
+    participant API as Express API
+    participant Loader as Source snapshot builder
     participant Rule as Deterministic rule
-    participant Validator as Evidence validator
-    participant Integrator as Evidence integrator
-    participant Report as Structured report
+    participant Evidence as Evidence validator / integrator
 
-    CLI->>Loader: Load selected Rust fixture
-    Loader-->>CLI: Immutable snapshot + manifest hashes
-    CLI->>Rule: Analyze the snapshot
-    Rule-->>CLI: Candidate findings + evidence
-    CLI->>Integrator: Integrate evidence against same snapshot
-    Integrator->>Validator: Recompute each evidence record
-    Validator-->>Integrator: validated / partial / unavailable / invalid
-    Integrator-->>CLI: Resolved references + integration status
-    CLI->>Report: Build deterministic report
-    Report-->>CLI: JSON report
+    User->>UI: Select fixture or submit Rust source
+    UI->>API: GET fixture review or POST custom review
+    API->>Loader: Validate and build bounded snapshot
+    Loader-->>API: Immutable snapshot + manifest/source hashes
+    API->>Rule: Analyze exact snapshot
+    Rule-->>API: Candidate findings + evidence records
+    API->>Evidence: Recompute evidence against same snapshot
+    Evidence-->>API: Validated / partial / unavailable / invalid
+    API-->>UI: Structured deterministic report + source context
+    UI-->>User: Findings, evidence, source viewer and verification ledger
 ```
 
-### Trust boundaries and terminology
+### Optional AI paths
 
-| Term | Meaning in this project |
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI as React workbench
+    participant API as Express API
+    participant NEAR as NEAR AI adapter / SDK
+    participant Meta as Meta Model adapter
+
+    User->>UI: Review consent and displayed source scope
+    alt NEAR AI explicitly authorized
+        UI->>API: POST /api/ai-review + consent header + single-use token
+        API->>API: Check origin, token, snapshot and operator configuration
+        API->>NEAR: Submit bounded source context after policy checks
+        NEAR-->>API: Model result + verification metadata
+        API-->>UI: Separate NEAR AI hypotheses and verification status
+    else Meta Model explicitly authorized for bundled fixture
+        UI->>API: POST /api/meta-review + separate consent + single-use token
+        API->>API: Reject custom/private source; verify fixture, token and snapshot
+        API->>Meta: Submit permitted bundled fixture context
+        Meta-->>API: Model response
+        API-->>UI: Separate unverified Meta hypotheses
+    end
+```
+
+## Deterministic engine and evidence model
+
+### Source ingestion and reproducibility
+
+The source loader accepts Rust `.rs` files and applies bounded traversal and snapshot rules. The custom-source path applies matching limits before the server builds the snapshot.
+
+| Limit | Default |
+|---|---:|
+| Rust source files | 200 |
+| Bytes per file | 1 MiB |
+| Total source bytes | 5 MiB |
+| Encoding | Strict UTF-8 validation |
+| Paths | Canonical relative POSIX paths; traversal and unsafe path forms rejected |
+| Snapshot | Immutable after creation |
+
+The manifest and source fingerprints use SHA-256 with domain-separated hashing and canonical file ordering. Hashes make it possible to compare source identity; they are not encryption, proof of authorship, or independent provenance.
+
+### Current deterministic rule
+
+| Field | Current behavior |
 |---|---|
-| **Finding / candidate** | A result emitted by the selected rule. It is a review lead, not proof of exploitability. |
-| **Evidence matched** | Dashboard wording for a location whose evidence reference is resolved and whose recomputed status is `validated`. It means the evidence corresponds to the loaded snapshot under the validator's checks—not that a vulnerability is confirmed. |
-| **Recomputed: validated** | The validator status produced by checking the evidence against the snapshot. The producer's declared status is shown separately. |
-| **Partial** | Evidence checks could not establish every required integrity property (for example, an excerpt hash was not supplied). |
-| **Complete integration** | Evidence records are validated and finding references resolve uniquely, with no invalid condition. |
-| **No candidate detected** | The selected rule emitted no finding for this input. This is **not** a safety certification. |
-| **Local deterministic demo** | The server runs the loader and deterministic demo pipeline against a bundled fixture on the same machine. |
+| Rule ID | `NEAR-RUST-CALLBACK-PRIVATE-001` |
+| Focus | NEAR Rust methods that accept `#[callback_result]` |
+| Review question | Is the callback-result handler protected by a recognized `#[private]` attribute or narrowly supported direct predecessor/current-account guard? |
+| Output | A review candidate with source-linked evidence and a severity/status |
+| Limitation | A recognized manual guard may be marked inconclusive; this rule does not prove the guard's complete effectiveness |
 
-The validator checks the evidence schema, snapshot and manifest structure, canonical paths and ordering, snapshot/manifest file consistency, file hashes and metadata, manifest/source hashes, evidence source hash, unique file reference, line bounds, and any supplied excerpt hash. A missing excerpt hash can result in `partial`, not `validated`.
+The rule is intentionally narrow. It may miss indirect or alternative authorization logic, other vulnerability classes, unsafe cross-contract behavior, dependency risks, and issues outside the inspected Rust source.
 
-## What the current deterministic rule checks
+### Evidence verification terminology
 
-The current rule ID is `NEAR-RUST-CALLBACK-PRIVATE-001`.
+| Status / label | Meaning | Does not mean |
+|---|---|---|
+| `validated` | Evidence passed the validator's applicable schema, snapshot, path, line-range and hash checks | The finding is exploitable or the contract is unsafe |
+| `partial` | Some evidence properties could not be established, such as when an optional excerpt hash is absent | A complete evidence verification |
+| `unavailable` | Required source or evidence context was unavailable | A successful check |
+| `invalid` | A validation check failed | A harmless warning that can be silently ignored |
+| Evidence matched | The evidence reference corresponds to the loaded snapshot under the validator's checks | Independent source provenance or vulnerability confirmation |
+| No candidate detected | The selected rule emitted no candidate for this input | The contract is safe or vulnerability-free |
 
-It looks for NEAR Rust callback-result handlers without a recognized `#[private]` attribute or the narrowly supported direct predecessor/current-account guard. A recognized manual guard is reported as inconclusive rather than treated as proof that the guard is effective.
+The validator checks the evidence schema, snapshot and manifest structure, canonical paths and ordering, snapshot/manifest file consistency, file hashes and metadata, manifest/source hashes, evidence source hash, unique file references, line bounds and any supplied excerpt hash. The evidence integrator resolves finding references and reports incomplete or invalid integration rather than silently upgrading a status.
 
-**Coverage is intentionally narrow.** The rule may miss indirect or alternative authorization logic, other vulnerability classes, unsafe cross-contract behavior, dependency risks, and issues outside the inspected Rust source.
+## AI provider boundaries
 
-## Local dashboard
+### NEAR AI — optional, attestation-gated hypothesis analysis
 
-The dashboard is a local presentation layer over the actual deterministic report.
+NEAR AI is integrated through the server-side `@nearai/inference-sdk` adapter. The configured model is fixed in code to `z-ai/glm-5.3-flash`; the browser cannot select a model or supply operator-approved measurements.
 
-| Item | Behavior |
+The NEAR AI action is inactive until the user explicitly authorizes the displayed source snapshot. The server additionally checks same-origin policy, a consent header, a short-lived single-use token bound to the source snapshot and model configuration, and the required server-side credentials and operator-approved measurements.
+
+The adapter requires the configured attestation and deployment policy checks, including current TCB status, required GPU evidence, verified deployment provenance, matching operator-approved Compose and OS-image measurements, and a verified provider-TEE response signature associated with the approved model-attestation evidence. Failed or unavailable verification must remain visible and must not be treated as success.
+
+| NEAR AI setting | Purpose |
 |---|---|
-| Bind address | `127.0.0.1` only |
-| Default port | `4173` (override with `PORT`) |
-| `GET /` | Serves `dashboard/index.html` |
-| `GET /api/review?fixture=triggering` | Loads the unguarded bundled fixture and returns its deterministic report |
-| `GET /api/review?fixture=safe` | Loads the `#[private]` fixture and returns its deterministic report plus a short-lived, single-use consent token bound to its snapshot and fixed model |
-| `POST /api/ai-review` | Runs the separate AI path only with the exact consent token, same-origin request, required consent header, and exact `{ fixture, snapshotHash, token }` body |
-| Invalid fixture or consent body | HTTP `400` |
-| Invalid origin/header | HTTP `403` |
-| Expired/reused token | HTTP `401` |
-| Unknown route | HTTP `404` |
-| Unsupported method | HTTP `405` |
+| `NEARAI_API_KEY` | Server-side API credential |
+| `NEARAI_OPERATOR_APPROVED_COMPOSE_HASH` | Operator-approved Compose measurement |
+| `NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH` | Operator-approved OS image measurement |
+| Model | Fixed in adapter: `z-ai/glm-5.3-flash` |
+| SDK | `@nearai/inference-sdk` pinned to `0.3.0` |
 
-The API response includes the selected fixture, report generation time, structured report, source excerpts taken from the same loaded immutable snapshot, and explicit execution metadata:
+The application can transmit the full loaded Rust source snapshot and deterministic-finding metadata to NEAR AI after explicit consent and policy checks. The adapter rejects source context above 256 KiB or a serialized prompt above 320 KiB rather than truncating it. E2EE and attestation are not a promise that the model does not process the submitted source. They also do not prove AI conclusions are correct, complete, or independently approved by NEAR.
 
-- `mode: local_deterministic_demo`
-- `aiInference: not_run`
-- `sourceTransmission: none`
+### Meta Model API — fixture-only, unverified hypotheses
 
-The dashboard renders the rule's actual severity, candidate count, evidence-integration status, evidence declaration versus recomputed status, source excerpts, source and manifest hashes, and interpretation/limitations. The optional AI panel displays the exact files, source byte count, snapshot hash, and fixed model before requiring a separate checkbox and action. The server reloads the fixture and consumes the token before inference; the browser cannot submit source content or select a model. AI output is displayed as hypotheses in a separate panel.
+Meta Model API is a separate optional provider using the Standard model `muse-spark-1.3`. It is not part of NEAR AI attestation and does not provide the provider-TEE response verification used by the NEAR path.
 
-The server sends no-store, nosniff, Content Security Policy, and no-referrer headers. It uses Node's built-in HTTP and filesystem modules; no separate web framework or hosted dashboard service is required.
+**Free-credit data-use notice:** Meta's dashboard warns that content submitted while free credits are active may be used for product improvement. SentinelReview therefore restricts this integration to bundled public or synthetic Rust test fixtures. Private, uploaded, or custom Rust source is rejected server-side and is not sent through this provider path.
 
-The optional `POST /api/ai-review` route requires the exact same-origin `Origin`, `X-SentinelReview-AI-Consent: 1`, JSON content type, and a body containing only `fixture`, `snapshotHash`, and `token`. The token expires after two minutes, is single-use, and is bound to the fixture, source hash, fixed model, SDK version, and current operator measurement configuration. It is not issued as consent; the user must separately confirm in the dashboard. The server reloads the fixture and verifies the snapshot hash before invoking the adapter.
+The Meta path requires its own explicit consent action and a short-lived, single-use token bound to the selected fixture snapshot and Meta configuration. The server independently enforces the fixture-only restriction; hiding or disabling a UI control is not the security boundary.
 
-## Quick start and step-by-step testing
+| Meta setting | Purpose |
+|---|---|
+| `META_MODEL_API_KEY` | Server-side Meta API credential; never expose it in browser code or commit it |
+| Provider | Meta Model API |
+| Model | Fixed in adapter: `muse-spark-1.3` (Standard) |
+| Allowed input | Bundled public/synthetic fixtures only |
+| Custom/private source | Rejected server-side |
+| Result status | Unverified AI hypotheses; no TEE attestation or cryptographic response signature |
 
-### 1. Prerequisites
+Meta hypotheses are displayed separately. They do not modify deterministic findings, establish exploitability, or become verified findings merely because the API returns a response. Review the provider's current data-use terms before enabling free-credit use.
 
-- Node.js **24.22.2 or newer** (the version used by CI). Use the nvm or fnm commands in the [Judge quick start](#judge-quick-start) to install it.
-- npm (included with Node.js).
+## API surface
+
+| Method | Endpoint | Purpose | Important behavior |
+|---|---|---|---|
+| `GET` | `/api/health` | Backend health check | Returns a small JSON health response |
+| `GET` | `/api/review` | Deterministic review of the default bundled fixture | Returns the structured report, snapshot files, hashes and provider configuration status |
+| `GET` | `/api/review?fixture=triggering` | Deterministic review of callback candidate fixture | No AI provider request is made |
+| `GET` | `/api/review?fixture=safe` | Deterministic review of safe example fixture | No AI provider request is made |
+| `POST` | `/api/review/custom` | Submit bounded custom Rust source for deterministic review | JSON request; custom source is processed by the application backend; no AI provider is contacted in this step |
+| `POST` | `/api/ai-review` | Optional NEAR AI hypothesis analysis | Same-origin checks, explicit consent header and single-use snapshot-bound token required |
+| `POST` | `/api/meta-review` | Optional Meta hypothesis analysis | Separate consent and token; server rejects custom/private source and permits bundled fixtures only |
+
+API responses use no-store behavior and security-related response headers. The frontend uses a guarded JSON response parser so HTML or malformed responses are surfaced as endpoint/status/content-type errors rather than misleading JSON parse failures.
+
+## Running locally
+
+### Requirements
+
+- Node.js **24.22.1 or newer** (as declared in `package.json`).
+- npm, included with Node.js.
 - Git.
 
-Check your installed versions:
+Check versions:
 
 ```bash
 node --version
 npm --version
 ```
 
-### 2. Get the project and install locked dependencies
+### Install and start the workbench
 
 ```bash
 git clone https://github.com/chokri29/SentinelReview.git
 cd SentinelReview
 npm ci
+npm run dev
 ```
 
-Use `npm ci` so the dependency tree is installed from the committed lockfile.
+Open the local URL shown by the development server. The Express application listens on `0.0.0.0:3000` by default; the Vite development middleware serves the React workbench through the application server.
 
-### 3. Run static type checking
+For a production-style start, build first and then start the server:
 
 ```bash
-npm run typecheck
+npm run build
+npm start
 ```
 
-Expected result: TypeScript completes with no type errors.
+The server uses port `3000` by default. Set `PORT` in the environment to override it.
 
-### 4. Run the automated test suite
+### Available commands
 
-```bash
-npm test
-```
+| Command | Purpose |
+|---|---|
+| `npm ci` | Install the exact dependency tree from `package-lock.json` |
+| `npm run dev` | Start the Express + Vite development workbench |
+| `npm run typecheck` | Run TypeScript checks (`tsc --noEmit`) |
+| `npm test` | Run the Vitest suite |
+| `npm run build` | Build the production frontend bundle into `dist/` |
+| `npm start` | Start the production Express server |
+| `npm run diagnose:nearai-model` | Run the NEAR model-metadata diagnostic; this is not a live inference review |
 
-Expected result: Vitest completes successfully. The suite includes source-loader, deterministic-rule, evidence-validation/integration, AI-adapter policy/verification, and dashboard HTTP smoke tests. The dashboard smoke test starts the real local server on an ephemeral port and exercises both fixture routes, response metadata, evidence excerpts, invalid fixture handling, consent-body/origin checks, single-use token concurrency, unknown routes, and rejected HTTP methods. Tests clear NEAR AI credentials and approved measurements; they do not make live provider requests.
+### Verification / CI
 
-### 5. Run the triggering deterministic fixture
-
-```bash
-npm run demo:deterministic
-```
-
-Expected behavior:
-- Loads `demo-fixtures/callback-unguarded/lib.rs`.
-- Runs the one deterministic callback-privacy rule.
-- Emits an informational candidate for the fixture.
-- Prints a structured JSON report with snapshot fingerprints, rule status, evidence integration, findings, and limitations.
-
-### 6. Run the safe example fixture
-
-```bash
-npm run demo:deterministic -- safe
-```
-
-Expected behavior:
-- Loads `demo-fixtures/callback-safe/lib.rs`, which uses `#[private]`.
-- The selected rule emits no finding for this fixture.
-- The report still does **not** certify the source as safe or vulnerability-free.
-
-### 7. Start and inspect the dashboard
-
-```bash
-npm run dashboard
-```
-
-Open **http://127.0.0.1:4173** in a browser on the same machine.
-
-1. The page loads the **Callback candidate** fixture by default.
-2. Inspect the candidate, its informational severity, source location, and source excerpt.
-3. Inspect the evidence panel. Compare **Producer declared** with **Recomputed**; these are deliberately separate.
-4. Read the **Evidence matched** explanation. It describes evidence correspondence to the loaded snapshot, not vulnerability confirmation.
-5. Switch to **Safe example**. Confirm that no candidate is displayed and that the safety limitation remains visible.
-6. Inspect the source and manifest SHA-256 fingerprints and the local/no-AI execution disclosure.
-7. Stop the server with `Ctrl+C`.
-
-To use a different port on macOS/Linux:
-
-```bash
-PORT=4174 npm run dashboard
-```
-
-PowerShell:
-
-```powershell
-$env:PORT = "4174"
-npm run dashboard
-```
-
-The dashboard binds to loopback and is not a static hosted site, GitHub Pages app, or remote review service. The browser requests the local server, which runs the deterministic pipeline. If the user explicitly authorizes the optional AI path and all configured checks pass, the server sends the full fixture source to the fixed NEAR AI model; this is not a local-only operation. E2EE/attestation do not mean the model cannot process the source.
-
-### 8. Run the same checks as CI
-
-The GitHub Actions workflow runs on pull requests targeting `main` and pushes to `main`. It performs:
+The GitHub Actions workflow on `main` runs the Node.js 24 environment and executes:
 
 1. `npm ci`
 2. `npm run typecheck`
 3. `npm test`
-4. `npm run demo:deterministic`
-5. `npm run demo:deterministic -- safe`
+4. `npm run build`
 
-CI does not perform live NEAR AI inference or run the controlled canary.
+The automated tests use mocks and fixtures for provider adapter and API policy behavior. Passing tests do not establish that external provider credentials, live inference, live attestation, or a deployed AI Studio environment are operational. Do not describe a live provider test as successful unless it has actually been run and observed.
 
-## Source layout
+## Repository layout
 
 | Path | Responsibility |
 |---|---|
-| `src/contracts/v1.ts` | Versioned Zod schemas and shared report/evidence contracts |
-| `src/source/load-source.ts` | Bounded Rust source loading, immutable snapshot, manifest creation |
+| `server.ts` | Express application, API routes, consent/token enforcement, proxy-aware same-origin validation and static production serving |
+| `src/App.tsx` | Main React workbench and request orchestration |
+| `src/components/` | Dashboard panels for source input, pipeline, findings, evidence, source viewer, verification ledger and AI providers |
+| `src/contracts/v1.ts` | Versioned Zod schemas and shared contracts |
+| `src/source/load-source.ts` | Bounded Rust source loading and immutable snapshots |
+| `src/source/custom-snapshot.ts` | Validates and constructs snapshots from submitted custom source |
 | `src/source/manifest-hash.ts` | Domain-separated SHA-256 manifest/source hashing |
-| `src/rules/parse-rust.ts` | Rust syntax parsing support for the deterministic rule |
-| `src/rules/near-rust-callback-private.ts` | The narrow NEAR callback-result privacy rule |
 | `src/source/validate-evidence.ts` | Deterministic evidence integrity validation |
-| `src/source/integrate-evidence.ts` | Evidence validation, duplicate detection, and finding-reference resolution |
-| `src/demo/deterministic-review.ts` | Builds the structured deterministic demo report |
-| `scripts/demo-deterministic-review.ts` | CLI entry point for the two deterministic fixtures |
-| `scripts/dashboard-server.ts` | Local HTTP server and fixture-backed report API |
-| `dashboard/index.html` | Dashboard presentation; consumes the local report API |
-| `src/ai/near-ai-adapter.ts` | Separate optional NEAR AI inference adapter and verification policy |
-| `scripts/near-ai-attestation-discovery.ts` | Attestation and runtime-measurement discovery utility |
-| `scripts/near-ai-controlled-canary.ts` | Conditional synthetic-prompt canary entry point |
-| `tests/` | Unit, contract, integration, and dashboard HTTP smoke tests |
-| `demo-fixtures/` | Bundled triggering and safe Rust examples |
+| `src/source/integrate-evidence.ts` | Evidence validation, duplicate detection and finding-reference resolution |
+| `src/rules/parse-rust.ts` | Rust syntax parsing support |
+| `src/rules/near-rust-callback-private.ts` | Narrow NEAR callback-result privacy rule |
+| `src/demo/deterministic-review.ts` | Builds the deterministic review report |
+| `src/ai/near-ai-adapter.ts` | NEAR AI inference and attestation/response-verification policy boundary |
+| `src/ai/meta-model-adapter.ts` | Fixture-only Meta Model API hypothesis adapter |
+| `demo-fixtures/` | Bundled triggering and safe Rust fixtures |
+| `tests/` | Contract, source, rule, adapter, UI and API regression tests |
+| `.github/workflows/ci.yml` | GitHub Actions CI workflow |
 
-## Source-ingestion limits
+## Security and responsible-use notes
 
-The loader applies bounded traversal defaults:
+- Treat submitted source code as sensitive. Custom source is transmitted to the SentinelReview backend for deterministic processing.
+- Do not submit secrets, credentials, private keys, or source you are not authorized to share.
+- NEAR AI transmission is a separate action requiring explicit consent and successful server-side policy checks.
+- Meta Model API is restricted to bundled public/synthetic fixtures; custom/private source is blocked server-side.
+- Keep all API keys in server-side environment secrets. Never put keys in React code, browser storage, committed files, screenshots, or public issue reports.
+- AI-generated content is a hypothesis, not a verified vulnerability. Human review and independent testing remain necessary.
+- A matching source hash is not encryption, provenance, authorship, or proof that the source is safe.
+- Missing, failed, unavailable, inconclusive, partial and not-run statuses must remain visible; never silently convert them into passing states.
+- Do not claim complete audit coverage, absolute confidentiality, independent NEAR approval, or guaranteed vulnerability detection.
 
-| Limit | Default |
-|---|---:|
-| Rust files | 200 |
-| Bytes per file | 1 MiB |
-| Total source bytes | 5 MiB |
-| Directory entries examined (including directories and non-Rust files) | 2,000 |
-| Directory depth (source root = depth 0) | 32 |
+## Project status
 
-These limits can be overridden through the loader options when used as a library. Exceeding an entry or depth limit fails the load; no partial snapshot is returned.
+SentinelReview is an evolving NEAR-focused review prototype. The current workbench combines deterministic-first source review and evidence verification with separately gated NEAR AI and fixture-only Meta hypothesis integrations. Its purpose is to make the review process and its trust boundaries inspectable—not to replace a professional security audit.
 
-When loading a contract for review, point the loader at the contract's Rust source directory (the directory containing the relevant `.rs` files), not the repository or workspace root. This avoids spending the bounded entry budget on unrelated files, build output, or dependencies.
-
-## Optional NEAR AI inference (separate from the demo)
-
-Live inference is separate from the local deterministic report. The demo commands never make provider requests. The dashboard does not make a provider request unless a user explicitly authorizes its AI panel; even then, the adapter requires a configured `NEARAI_API_KEY` and operator-approved deployment measurements. `src/ai/near-ai-adapter.ts` remains the inference and verification policy boundary.
-
-When inference is explicitly enabled by an integrating application, the adapter sends the complete loaded Rust-source snapshot (each file's path and contents) together with deterministic-finding metadata to the configured NEAR AI model. It sends neither source nor findings if the complete source exceeds 256 KiB or the serialized prompt exceeds 320 KiB; it does not truncate either to fit. Inference also requires a configured `NEARAI_API_KEY` and explicit operator-approved model deployment measurements. With no approved measurements, inference is not run. Supply the API key through the runtime environment or application configuration, never commit it. For the dashboard's optional path, set these values in the environment of the process that starts `npm run dashboard`:
-
-- `NEARAI_API_KEY`
-- `NEARAI_OPERATOR_APPROVED_COMPOSE_HASH`
-- `NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH`
-
-The dashboard model is fixed to `z-ai/glm-5.3-flash`; the browser cannot select a model or supply measurement approvals. The two measurement values are an operator-controlled allowlist and must be established from the actual verified deployment. If they are absent, inference is not run. Do not copy the credentials or measurements into frontend code or commit them.
-
-The client configures the NEAR AI SDK with `e2ee: true` and Ed25519 signing, and validates attestation and response-verification results before accepting AI findings. These implementation details do not establish provider retention practices, absolute confidentiality, or guarantees about data handling; consult current provider documentation and your organization's policies before sending source to a service. No live inference result is asserted by this repository's local demo.
-
-### Attestation and deployment measurements
-
-The inference adapter checks the SDK-verified gateway/model attestation against its configured policy, requires an `UpToDate` TCB status, required GPU evidence, verified model deployment provenance, and runtime Compose/OS-image measurements matching the operator-supplied approved measurements. It also requires a usable model Ed25519 key before inference.
-
-After inference, it requires a verified response ID matching the completion ID and a `provider_tee` response signature associated with approved model-attestation evidence before accepting candidates.
-
-The dashboard keeps `independentNearApproval: "not_established"` separate from the operator allowlist. These are checks and measurements observed or enforced by the implementation; they are not an independent security review or independent NEAR approval. The separate `scripts/near-ai-attestation-discovery.ts` utility reports gateway/model TCB and GPU verification results, runtime Compose and OS-image hashes, and a bounded Compose image inventory. Discovery explicitly reports `deploymentProvenance: "not_checked"` and `measurementApproval: "not_approved"`. A parsed Compose file is configuration data, not proof that those images were deployed or approved.
-
-### Controlled canary
-
-The controlled canary in `scripts/near-ai-controlled-canary.ts` is conditional and is not part of the local demo or CI. It requires `NEARAI_API_KEY` plus operator-supplied values for:
-
-- `NEARAI_OPERATOR_APPROVED_MODEL_ID`
-- `NEARAI_OPERATOR_APPROVED_COMPOSE_HASH`
-- `NEARAI_OPERATOR_APPROVED_OS_IMAGE_HASH`
-
-The model value must match the canary's fixed model, and the supplied hashes must match the runtime measurements returned by attestation. The canary then checks the configured TCB/GPU and gateway TLS-attestation policies, sends only its fixed synthetic prompt, and verifies the response ID and provider TEE signature. The values are an operator-controlled allowlist, not independent NEAR approval; its report preserves `independentNearApproval: "not_established"`.
-
-These prerequisites describe how it can be run; they do not mean a live canary has been performed successfully. Do not run live inference or the canary unless the operator intentionally configures and approves the target deployment and understands what data is sent.
-
-## Security limitations and interpretation
-
-- The deterministic rule set is limited and is not a complete audit.
-- A finding, whether deterministic or AI-generated, does not by itself establish exploitability.
-- Absence of findings does not establish safety or absence of vulnerabilities.
-- Evidence validation checks correspondence to the supplied snapshot; a matching hash is not independent provenance or source authenticity.
-- The dashboard's **Evidence matched** label describes evidence integrity only.
-- Attestation, signature, TCB, GPU, and measurement checks establish only the properties they check. They do not prove analysis correctness, completeness, provider retention behavior, or independent approval.
-- Treat incomplete, failed, unavailable, inconclusive, and not-run states as limitations, not as passing results.
-
-SentinelReview is an evolving foundation. Interpret its reports and measurements alongside source review, tests, and an appropriately scoped independent security assessment.
+For questions or issues, use the [GitHub repository](https://github.com/chokri29/SentinelReview).
