@@ -97,6 +97,7 @@ describe("createNearAiAdapter policy and verification", () => {
       { onSourceTransmission: () => { transmitted = true; } },
     );
     expect(res1.status).toBe("failed");
+    expect(res1.coverage).toBe("not_run");
     expect(res1.provenance.privateModelPolicy).toBe("unavailable");
     expect(transmitted).toBe(false);
     expect(verify).not.toHaveBeenCalled();
@@ -117,6 +118,7 @@ describe("createNearAiAdapter policy and verification", () => {
       rule.deterministicAnalysis.findings,
     );
     expect(res2.status).toBe("not_run");
+    expect(res2.coverage).toBe("not_run");
     expect(verify).not.toHaveBeenCalled();
   });
 
@@ -137,6 +139,7 @@ describe("createNearAiAdapter policy and verification", () => {
       rule.deterministicAnalysis.findings,
     );
     expect(nonFrozenRes.status).toBe("failed");
+    expect(nonFrozenRes.coverage).toBe("not_run");
     expect(nonFrozenRes.provenance.privateModelPolicy).toBe("rejected");
     expect(createClient).not.toHaveBeenCalled();
 
@@ -145,7 +148,7 @@ describe("createNearAiAdapter policy and verification", () => {
     ]);
     const emptyRes = await adapter(emptySnapshot, []);
     expect(emptyRes.status).toBe("partial");
-    expect(emptyRes.coverage).toBe("incomplete");
+    expect(emptyRes.coverage).toBe("not_run");
     expect(createClient).not.toHaveBeenCalled();
   });
 
@@ -185,6 +188,7 @@ describe("createNearAiAdapter policy and verification", () => {
       },
     });
     expect(res.status).toBe("failed");
+    expect(res.coverage).toBe("not_run");
     expect(res.provenance.modelAttestationVerification).toBe("failed");
     expect(res.provenance.privateModelPolicy).toBe("rejected");
     expect(transmitted).toBe(false);
@@ -235,6 +239,7 @@ describe("createNearAiAdapter policy and verification", () => {
       rule.deterministicAnalysis.findings,
     );
     expect(gatewayRes.status).toBe("failed");
+    expect(gatewayRes.coverage).toBe("incomplete");
     expect(gatewayRes.provenance.privateModelPolicy).toBe("rejected");
     expect(gatewayRes.findings).toHaveLength(0);
 
@@ -289,6 +294,7 @@ describe("createNearAiAdapter policy and verification", () => {
       rule.deterministicAnalysis.findings,
     );
     expect(rangeRes.status).toBe("failed");
+    expect(rangeRes.coverage).toBe("incomplete");
     expect(rangeRes.findings).toHaveLength(0);
   });
 
@@ -351,11 +357,122 @@ describe("createNearAiAdapter policy and verification", () => {
     });
     expect(transmitted).toBe(true);
     expect(res.status).toBe("complete");
+    expect(res.coverage).toBe("complete");
     expect(res.provenance.privateModelPolicy).toBe("passed");
     expect(res.provenance.responseVerification).toBe("verified");
     expect(res.findings).toHaveLength(1);
     expect(res.findings[0]?.origin).toBe("ai_hypothesis");
     expect(res.evidence[0]?.validationStatus).toBe("validated");
     expect(res.evidenceExcerpts[0]?.excerpt).toContain("pub fn on_cb");
+  });
+
+  it("reports coverage: incomplete (never complete) when SDK completion or response verification fails after transmission attempt", async () => {
+    const snapshot = makeSampleSnapshot();
+    const rule = runNearRustCallbackPrivateRule(snapshot);
+    const modelAtt = makeModelAttestation();
+
+    // 1. SDK completion call throws after onSourceTransmission
+    const completionFailureAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "test-key",
+      createClient: () => ({
+        verify: async () => ({
+          gateway: makeGatewayAttestation(),
+          models: [modelAtt],
+          verifiedAt: Date.now(),
+        }),
+        createChatCompletion: async () => {
+          throw new Error("network timeout");
+        },
+        verifyResponse: vi.fn(),
+      }),
+    });
+
+    let call1Attempted = false;
+    const call1Res = await completionFailureAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+      {
+        onSourceTransmission: () => {
+          call1Attempted = true;
+        },
+      },
+    );
+    expect(call1Attempted).toBe(true);
+    expect(call1Res.status).toBe("failed");
+    expect(call1Res.coverage).toBe("incomplete");
+    expect(call1Res.provenance.privateModelPolicy).toBe("unavailable");
+
+    // 2. verifyResponse throws after completion succeeds
+    const verifyThrowsAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "test-key",
+      createClient: () => ({
+        verify: async () => ({
+          gateway: makeGatewayAttestation(),
+          models: [modelAtt],
+          verifiedAt: Date.now(),
+        }),
+        createChatCompletion: async () => ({
+          id: "resp-verify-err",
+          choices: [{ message: { content: JSON.stringify({ findings: [] }) } }],
+        }),
+        verifyResponse: async () => {
+          throw new Error("signature check failed");
+        },
+      }),
+    });
+
+    let call2Attempted = false;
+    const call2Res = await verifyThrowsAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+      {
+        onSourceTransmission: () => {
+          call2Attempted = true;
+        },
+      },
+    );
+    expect(call2Attempted).toBe(true);
+    expect(call2Res.status).toBe("failed");
+    expect(call2Res.coverage).toBe("incomplete");
+    expect(call2Res.provenance.responseVerification).toBe("failed");
+
+    // 3. Invalid JSON returned from model
+    const badJsonAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "test-key",
+      createClient: () => ({
+        verify: async () => ({
+          gateway: makeGatewayAttestation(),
+          models: [modelAtt],
+          verifiedAt: Date.now(),
+        }),
+        createChatCompletion: async () => ({
+          id: "resp-bad-json",
+          choices: [{ message: { content: "{not valid json" } }],
+        }),
+        verifyResponse: async () => ({
+          id: "resp-bad-json",
+          completionId: "resp-bad-json",
+          signatureKind: "provider_tee",
+          signature: {
+            kind: "provider_tee",
+            signer: { signingAlgo: "ed25519", signingAddress: "model-signer-1" },
+            signedText: "{}",
+            signature: "sig",
+          },
+          attestations: [modelAtt],
+          attestation: modelAtt,
+        }),
+      }),
+    });
+
+    const badJsonRes = await badJsonAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+    );
+    expect(badJsonRes.status).toBe("failed");
+    expect(badJsonRes.coverage).toBe("incomplete");
   });
 });

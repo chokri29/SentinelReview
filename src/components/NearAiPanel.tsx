@@ -21,6 +21,8 @@ function verificationTone(status: string): string {
       return "text-emerald-400";
     case "partial":
     case "not_run":
+    case "incomplete":
+    case "attempted":
       return "text-amber-400";
     case "failed":
     case "rejected":
@@ -215,11 +217,31 @@ export function NearAiPanel({
                 <span className="font-semibold text-slate-100">
                   AI hypothesis result ({matchingAiResponse.aiAnalysis.status})
                 </span>
-                <div className="flex items-center gap-2 text-slate-400">
+                <div className="flex flex-wrap items-center gap-2 text-slate-400">
                   <span>
                     Transmission:{" "}
-                    <span className="font-mono text-slate-200">
+                    <span
+                      title={
+                        matchingAiResponse.execution.sourceTransmission === "attempted"
+                          ? "Source-bearing payload was handed to the NEAR AI SDK; network delivery is unverified."
+                          : "No source-bearing inference request was attempted."
+                      }
+                      className={`font-mono ${verificationTone(
+                        matchingAiResponse.execution.sourceTransmission,
+                      )}`}
+                    >
                       {matchingAiResponse.execution.sourceTransmission}
+                    </span>
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    Coverage:{" "}
+                    <span
+                      className={`font-mono ${verificationTone(
+                        matchingAiResponse.aiAnalysis.coverage,
+                      )}`}
+                    >
+                      {matchingAiResponse.aiAnalysis.coverage}
                     </span>
                   </span>
                   <span aria-hidden="true">·</span>

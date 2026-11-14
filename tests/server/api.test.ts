@@ -330,11 +330,12 @@ describe("SentinelReview Express API", () => {
     const body = (await res.json()) as {
       approvedMeasurementsConfigured: boolean;
       execution: { sourceTransmission: string; aiInference: string };
-      aiAnalysis: { provenance: { privateModelPolicy: string } };
+      aiAnalysis: { coverage: string; provenance: { privateModelPolicy: string } };
     };
     expect(body.approvedMeasurementsConfigured).toBe(false);
     expect(body.execution.sourceTransmission).toBe("none");
     expect(body.execution.aiInference).toBe("failed");
+    expect(body.aiAnalysis.coverage).toBe("not_run");
     expect(body.aiAnalysis.provenance.privateModelPolicy).toBe("unavailable");
     expect(verifySpy).not.toHaveBeenCalled();
 
@@ -410,9 +411,10 @@ describe("SentinelReview Express API", () => {
     expect(res2.status).toBe(200);
     const body2 = (await res2.json()) as {
       execution: { sourceTransmission: string };
-      aiAnalysis: { provenance: { privateModelPolicy: string } };
+      aiAnalysis: { coverage: string; provenance: { privateModelPolicy: string } };
     };
     expect(body2.execution.sourceTransmission).toBe("none");
+    expect(body2.aiAnalysis.coverage).toBe("not_run");
     expect(body2.aiAnalysis.provenance.privateModelPolicy).toBe("rejected");
   });
 
@@ -560,6 +562,250 @@ describe("SentinelReview Express API", () => {
       }),
     });
     expect(evictedRes.status).toBe(404);
+  });
+
+  it("reports sourceTransmission as attempted and coverage as incomplete on post-callback SDK/verification failures while keeping deterministic findings intact", async () => {
+    const approved = {
+      composeHash: "approved-c",
+      osImageHash: "approved-os",
+    };
+    const modelAtt = {
+      signer: { signingAlgo: "ed25519", signingAddress: "model-signer-1" },
+      tcbStatus: "UpToDate",
+      advisoryIds: [],
+      deployment: {
+        appCompose: "m",
+        runtimeMeasurements: approved,
+      },
+      deploymentProvenance: "verified",
+      report: {},
+      gpuEvidence: "verified",
+      signingPublicKey: "pub-key",
+    };
+    const gatewayAtt = {
+      signer: { signingAlgo: "ed25519", signingAddress: "gw-signer-1" },
+      tcbStatus: "UpToDate",
+      advisoryIds: [],
+      deployment: {
+        appCompose: "gw",
+        runtimeMeasurements: { composeHash: "g1", osImageHash: "g2" },
+      },
+      deploymentProvenance: "verified",
+      report: {},
+      tlsBinding: { kind: "none" },
+    };
+
+    // 1. SDK completion call fails after callback
+    const sdkFailServer = await startTestServer({
+      getAiConfig: () => ({
+        apiKey: "test-key",
+        composeHash: approved.composeHash,
+        osImageHash: approved.osImageHash,
+      }),
+      createAiAdapter: () =>
+        createNearAiAdapter({
+          approvedModelDeployments: [approved],
+          getApiKey: () => "test-key",
+          createClient: () => ({
+            verify: async () => ({
+              gateway: gatewayAtt,
+              models: [modelAtt],
+              verifiedAt: Date.now(),
+            }),
+            createChatCompletion: async () => {
+              throw new Error("gateway timeout");
+            },
+            verifyResponse: vi.fn(),
+          }),
+        }),
+    });
+
+    const detBefore = (await fetch(
+      `${sdkFailServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      execution: { sourceTransmission: string };
+      report: {
+        snapshot: { sourceHash: string };
+        overallAnalysisStatus: string;
+        findings: { findingId: string }[];
+      };
+      consentToken: string;
+    };
+    expect(detBefore.execution.sourceTransmission).toBe("none");
+    expect(detBefore.report.overallAnalysisStatus).toBe("finding");
+    expect(detBefore.report.findings).toHaveLength(1);
+
+    const sdkFailRes = await fetch(`${sdkFailServer.baseUrl}/api/ai-review`, {
+      method: "POST",
+      headers: {
+        Origin: sdkFailServer.origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: detBefore.report.snapshot.sourceHash,
+        token: detBefore.consentToken,
+      }),
+    });
+    expect(sdkFailRes.status).toBe(200);
+    const sdkFailJson = (await sdkFailRes.json()) as {
+      execution: { sourceTransmission: string; aiInference: string };
+      aiAnalysis: { status: string; coverage: string };
+    };
+    expect(sdkFailJson.execution.sourceTransmission).toBe("attempted");
+    expect(sdkFailJson.execution.aiInference).toBe("failed");
+    expect(sdkFailJson.aiAnalysis.status).toBe("failed");
+    expect(sdkFailJson.aiAnalysis.coverage).toBe("incomplete");
+
+    // Deterministic review remains intact after AI failure
+    const detAfter = (await fetch(
+      `${sdkFailServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { overallAnalysisStatus: string; findings: { findingId: string }[] };
+    };
+    expect(detAfter.report.overallAnalysisStatus).toBe("finding");
+    expect(detAfter.report.findings).toHaveLength(1);
+    expect(detAfter.report.findings[0]?.findingId).toBe(
+      detBefore.report.findings[0]?.findingId,
+    );
+
+    // 2. Response verification fails after completion -> attempted + incomplete
+    const verifyFailServer = await startTestServer({
+      getAiConfig: () => ({
+        apiKey: "test-key",
+        composeHash: approved.composeHash,
+        osImageHash: approved.osImageHash,
+      }),
+      createAiAdapter: () =>
+        createNearAiAdapter({
+          approvedModelDeployments: [approved],
+          getApiKey: () => "test-key",
+          createClient: () => ({
+            verify: async () => ({
+              gateway: gatewayAtt,
+              models: [modelAtt],
+              verifiedAt: Date.now(),
+            }),
+            createChatCompletion: async () => ({
+              id: "resp-unverified",
+              choices: [{ message: { content: JSON.stringify({ findings: [] }) } }],
+            }),
+            verifyResponse: async () => {
+              throw new Error("bad signature");
+            },
+          }),
+        }),
+    });
+
+    const revVerifyFail = (await fetch(
+      `${verifyFailServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+    };
+
+    const verifyFailRes = await fetch(
+      `${verifyFailServer.baseUrl}/api/ai-review`,
+      {
+        method: "POST",
+        headers: {
+          Origin: verifyFailServer.origin,
+          "Content-Type": "application/json",
+          "x-sentinelreview-ai-consent": "1",
+        },
+        body: JSON.stringify({
+          sourceKind: "fixture",
+          fixture: "triggering",
+          snapshotHash: revVerifyFail.report.snapshot.sourceHash,
+          token: revVerifyFail.consentToken,
+        }),
+      },
+    );
+    expect(verifyFailRes.status).toBe(200);
+    const verifyFailJson = (await verifyFailRes.json()) as {
+      execution: { sourceTransmission: string; aiInference: string };
+      aiAnalysis: { status: string; coverage: string; responseVerification: string };
+    };
+    expect(verifyFailJson.execution.sourceTransmission).toBe("attempted");
+    expect(verifyFailJson.execution.aiInference).toBe("failed");
+    expect(verifyFailJson.aiAnalysis.status).toBe("failed");
+    expect(verifyFailJson.aiAnalysis.coverage).toBe("incomplete");
+    expect(verifyFailJson.aiAnalysis.responseVerification).toBe("failed");
+
+    // 3. Full success path -> attempted + complete
+    const successServer = await startTestServer({
+      getAiConfig: () => ({
+        apiKey: "test-key",
+        composeHash: approved.composeHash,
+        osImageHash: approved.osImageHash,
+      }),
+      createAiAdapter: () =>
+        createNearAiAdapter({
+          approvedModelDeployments: [approved],
+          getApiKey: () => "test-key",
+          createClient: () => ({
+            verify: async () => ({
+              gateway: gatewayAtt,
+              models: [modelAtt],
+              verifiedAt: Date.now(),
+            }),
+            createChatCompletion: async () => ({
+              id: "resp-ok",
+              choices: [{ message: { content: JSON.stringify({ findings: [] }) } }],
+            }),
+            verifyResponse: async () => ({
+              id: "resp-ok",
+              completionId: "resp-ok",
+              signatureKind: "provider_tee",
+              signature: {
+                kind: "provider_tee",
+                signer: {
+                  signingAlgo: "ed25519",
+                  signingAddress: "model-signer-1",
+                },
+                signedText: "{}",
+                signature: "sig",
+              },
+              attestations: [modelAtt],
+              attestation: modelAtt,
+            }),
+          }),
+        }),
+    });
+
+    const revSuccess = (await fetch(
+      `${successServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+    };
+
+    const successRes = await fetch(`${successServer.baseUrl}/api/ai-review`, {
+      method: "POST",
+      headers: {
+        Origin: successServer.origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: revSuccess.report.snapshot.sourceHash,
+        token: revSuccess.consentToken,
+      }),
+    });
+    expect(successRes.status).toBe(200);
+    const successJson = (await successRes.json()) as {
+      execution: { sourceTransmission: string; aiInference: string };
+      aiAnalysis: { status: string; coverage: string; responseVerification: string };
+    };
+    expect(successJson.execution.sourceTransmission).toBe("attempted");
+    expect(successJson.execution.aiInference).toBe("complete");
+    expect(successJson.aiAnalysis.status).toBe("complete");
+    expect(successJson.aiAnalysis.coverage).toBe("complete");
+    expect(successJson.aiAnalysis.responseVerification).toBe("verified");
   });
 });
 

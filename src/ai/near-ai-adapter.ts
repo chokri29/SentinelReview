@@ -835,7 +835,7 @@ export function createNearAiAdapter(
     if (snapshot.files.every((file) => file.lineCount === 0)) {
       return buildResult({
         status: "partial",
-        coverage: "incomplete",
+        coverage: "not_run",
         provenance,
         limitations: [
           "The snapshot contains no source lines; AI analysis was not run.",
@@ -864,7 +864,7 @@ export function createNearAiAdapter(
     if (sourceBytes > MAX_SOURCE_CONTEXT_BYTES) {
       return buildResult({
         status: "partial",
-        coverage: "incomplete",
+        coverage: "not_run",
         provenance,
         limitations: [
           "The complete source snapshot exceeds the AI source-context limit; no source was truncated or sent.",
@@ -877,7 +877,7 @@ export function createNearAiAdapter(
     if (promptBytes > MAX_PROMPT_BYTES) {
       return buildResult({
         status: "partial",
-        coverage: "incomplete",
+        coverage: "not_run",
         provenance,
         limitations: [
           "The complete prompt exceeds the AI prompt-size limit; no source or findings were truncated or sent.",
@@ -1067,7 +1067,7 @@ export function createNearAiAdapter(
     } catch {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance: {
           ...provenance,
           privateModelPolicy: "unavailable",
@@ -1082,7 +1082,7 @@ export function createNearAiAdapter(
     if (responseId === undefined) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1100,7 +1100,7 @@ export function createNearAiAdapter(
     } catch {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance: {
           ...provenance,
           responseVerification: "failed",
@@ -1115,7 +1115,7 @@ export function createNearAiAdapter(
     if (!isVerifiedCompletionResult(verified)) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance: {
           ...provenance,
           responseVerification: "failed",
@@ -1136,7 +1136,7 @@ export function createNearAiAdapter(
     if (verified.id !== responseId) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1150,7 +1150,7 @@ export function createNearAiAdapter(
     if (verified.signatureKind !== "provider_tee") {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1173,7 +1173,7 @@ export function createNearAiAdapter(
     ) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance: {
           ...provenance,
           privateModelPolicy: "rejected",
@@ -1190,7 +1190,7 @@ export function createNearAiAdapter(
     if (content === undefined) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance,
         limitations: [
           "The verified response did not contain a non-empty text completion; no AI findings were accepted.",
@@ -1204,7 +1204,7 @@ export function createNearAiAdapter(
     } catch {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance,
         limitations: [
           "The verified model output was not valid JSON; no AI findings were accepted.",
@@ -1216,7 +1216,7 @@ export function createNearAiAdapter(
     if (!parsedOutput.success) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance,
         limitations: [
           "The verified model output did not match the strict AI finding schema; no AI findings were accepted.",
@@ -1234,7 +1234,7 @@ export function createNearAiAdapter(
     ) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance,
         limitations: [
           "At least one AI finding referenced a noncanonical, out-of-snapshot, or out-of-range source location; no AI findings were accepted.",
@@ -1245,7 +1245,7 @@ export function createNearAiAdapter(
     if (hasDuplicateCandidateRanges(parsedOutput.data.findings)) {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance,
         limitations: [
           "The AI output contains duplicate source ranges; no AI findings were accepted.",
@@ -1269,7 +1269,7 @@ export function createNearAiAdapter(
       if (evidenceById.has(generated.evidence.evidenceId)) {
         return buildResult({
           status: "failed",
-          coverage: "complete",
+          coverage: "incomplete",
           provenance,
           limitations: [
             "Generated AI evidence contains a duplicate reference; no AI findings were accepted.",
@@ -1280,7 +1280,7 @@ export function createNearAiAdapter(
       if (validation.status !== "validated") {
         return buildResult({
           status: "failed",
-          coverage: "complete",
+          coverage: "incomplete",
           provenance,
           limitations: [
             "Locally generated AI evidence failed snapshot validation; no AI findings were accepted.",
@@ -1305,7 +1305,7 @@ export function createNearAiAdapter(
     if (integrated.status !== "complete") {
       return buildResult({
         status: "failed",
-        coverage: "complete",
+        coverage: "incomplete",
         provenance,
         limitations: [
           "AI evidence references did not integrate completely; no AI findings were accepted.",

@@ -516,7 +516,7 @@ export async function createApp(
       return;
     }
 
-    let sourceTransmission: "none" | "sent" = "none";
+    let sourceTransmission: "none" | "attempted" = "none";
 
     try {
       let snapshot: SourceLoadResult | undefined;
@@ -552,7 +552,7 @@ export async function createApp(
         ruleResult.deterministicAnalysis.findings,
         {
           onSourceTransmission: () => {
-            sourceTransmission = "sent";
+            sourceTransmission = "attempted";
           },
         },
       );

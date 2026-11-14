@@ -106,7 +106,7 @@ export interface ReviewResponse {
   execution: {
     mode: string;
     aiInference: string;
-    sourceTransmission: string;
+    sourceTransmission: "none" | "attempted";
   };
   snapshotFiles: SnapshotFileRecord[];
   totalBytes: number;
@@ -134,7 +134,7 @@ export interface AiAnalysisResponse {
   execution: {
     mode: string;
     aiInference: string;
-    sourceTransmission: "none" | "sent";
+    sourceTransmission: "none" | "attempted";
   };
   aiAnalysis: {
     status: "complete" | "partial" | "failed" | "not_run";
