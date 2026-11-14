@@ -154,6 +154,11 @@ export interface NearAiClient {
   verifyResponse(id: string): Promise<unknown>;
 }
 
+export interface NearAiRunOptions {
+  /** Called synchronously at the outbound completion-request boundary. */
+  readonly onSourceTransmission?: () => void;
+}
+
 export interface NearAiAdapterDependencies {
   readonly getApiKey?: () => string | undefined;
   /** Empty by default: model execution stays unavailable until measurements are explicitly approved. */
@@ -800,6 +805,7 @@ export function createNearAiAdapter(
 ): (
   snapshot: SourceLoadResult,
   deterministicFindings: readonly FindingInput[],
+  options?: NearAiRunOptions,
 ) => Promise<NearAiAnalysisResult> {
   const getApiKey = dependencies.getApiKey ?? getDefaultApiKey;
   const createClient = dependencies.createClient ?? defaultClientFactory;
@@ -809,7 +815,7 @@ export function createNearAiAdapter(
       .filter((key): key is string => key !== undefined),
   );
 
-  return async (snapshot, deterministicFindings) => {
+  return async (snapshot, deterministicFindings, runOptions = {}) => {
     let provenance = initialProvenance();
 
     if (!isDeeplyFrozenSnapshot(snapshot)) {
@@ -1049,6 +1055,9 @@ export function createNearAiAdapter(
 
     let completion: unknown;
     try {
+      // This callback marks the exact boundary immediately before source-bearing
+      // prompt data is handed to the SDK for outbound transmission.
+      runOptions.onSourceTransmission?.();
       completion = await client.createChatCompletion({
         model: NEAR_AI_MODEL_ID,
         max_tokens: MAX_COMPLETION_TOKENS,
