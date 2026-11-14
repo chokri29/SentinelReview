@@ -111,7 +111,7 @@ sequenceDiagram
         API-->>UI: Separate NEAR AI hypotheses and verification status
     else Meta Model explicitly authorized for bundled fixture
         UI->>API: POST /api/meta-review + separate consent + single-use token
-        API->>API: Reject custom/private source; verify fixture, token and snapshot
+        API->>API: Reject custom/private source and verify fixture, token and snapshot
         API->>Meta: Submit permitted bundled fixture context
         Meta-->>API: Model response
         API-->>UI: Separate unverified Meta hypotheses
