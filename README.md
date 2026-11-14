@@ -13,8 +13,8 @@
   <a href="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml">
     <img src="https://github.com/chokri29/SentinelReview/actions/workflows/ci.yml/badge.svg?branch=main" alt="GitHub Actions CI">
   </a>
-  <a href="https://github.com/chokri29/SentinelReview">
-    <img src="https://img.shields.io/badge/platform-NEAR%20%7C%20Rust-00C08B" alt="NEAR and Rust">
+  <a href="#running-locally">
+    <img src="https://img.shields.io/badge/Try%20it%20Running%20locally-00C08B" alt="Try it Running locally">
   </a>
   <a href="https://nodejs.org/en/download/" title="Download Node.js">
     <img src="https://img.shields.io/badge/runtime-Node.js%2024+-339933?logo=node.js&logoColor=white" alt="Node.js 24 or newer">
