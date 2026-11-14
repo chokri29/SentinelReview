@@ -1,5 +1,7 @@
 import "dotenv/config";
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express, {
@@ -82,6 +84,8 @@ interface CachedCustomSnapshot {
 export interface ServerAppOptions {
   readonly enableVite?: boolean;
   readonly tokenTtlMs?: number;
+  readonly trustProxy?: boolean;
+  readonly trustedProxyHost?: string;
   readonly customLimits?: Pick<
     SourceLoadOptions,
     "maxFiles" | "maxFileBytes" | "maxTotalBytes"
@@ -201,53 +205,250 @@ function buildSourceExcerpts(
   return sourceExcerpts;
 }
 
-function isSameOriginRequest(req: Request): boolean {
-  const originHeader = req.headers.origin;
-  if (typeof originHeader !== "string" || originHeader.length === 0) {
+interface TrustedProxyPolicy {
+  readonly trustProxy: boolean;
+  readonly trustedProxyHost: string;
+}
+
+const FORWARDING_HEADER_NAMES = [
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-for",
+  "x-real-ip",
+  "forwarded",
+] as const;
+
+function isAiStudioNginxRuntime(): boolean {
+  return (
+    process.env.APP_DIR === "/app/applet" &&
+    existsSync("/etc/nginx/nginx.conf")
+  );
+}
+
+function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
+  return (
+    remoteAddress === "127.0.0.1" ||
+    remoteAddress === "::1" ||
+    remoteAddress === "::ffff:127.0.0.1"
+  );
+}
+
+function isEncryptedSocket(req: Request): boolean {
+  return (
+    "encrypted" in req.socket &&
+    Boolean((req.socket as { encrypted?: unknown }).encrypted)
+  );
+}
+
+function countRawHeaderOccurrences(req: Request, headerName: string): number {
+  if (!Array.isArray(req.rawHeaders)) {
+    return req.headers[headerName] === undefined ? 0 : 1;
+  }
+  const target = headerName.toLowerCase();
+  let count = 0;
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    if (req.rawHeaders[i]?.toLowerCase() === target) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function getStrictSingleHeader(req: Request, headerName: string): string | null {
+  if (countRawHeaderOccurrences(req, headerName) !== 1) {
+    return null;
+  }
+  const value = req.headers[headerName];
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  return value;
+}
+
+function parseSingleHostHeader(
+  value: string | null,
+  protocol: "http:" | "https:",
+): string | null {
+  if (value === null || value.length === 0 || /[\s,@/?#\\]/.test(value)) {
+    return null;
+  }
+  try {
+    const parsed = new URL(`${protocol}//${value}`);
+    if (
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      return null;
+    }
+    const normalizedInput = value.toLowerCase();
+    return parsed.host === normalizedInput ? parsed.host : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseSingleForwardedProto(
+  value: string | null,
+): "http" | "https" | null {
+  if (value === "http" || value === "https") {
+    return value;
+  }
+  return null;
+}
+
+function isValidSingleIpHeader(value: string | null): boolean {
+  if (value === null || /[\s,]/.test(value)) {
+    return false;
+  }
+  return isIP(value) !== 0;
+}
+
+function isValidForwardedForHeader(value: string | null): boolean {
+  if (value === null || value.trim().length === 0) {
+    return false;
+  }
+  const parts = value.split(",");
+  return parts.every((part) => {
+    const trimmed = part.trim();
+    return trimmed.length > 0 && isIP(trimmed) !== 0;
+  });
+}
+
+function hasConflictingForwardedHeader(
+  req: Request,
+  expectedHost: string,
+  expectedOriginProtocol: "http:" | "https:",
+): boolean {
+  const count = countRawHeaderOccurrences(req, "forwarded");
+  if (count === 0) return false;
+  if (count > 1) return true;
+  const raw = req.headers.forwarded;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return true;
+  }
+  const expectedProto = expectedOriginProtocol === "https:" ? "https" : "http";
+  const entries = raw.split(",");
+  for (const entry of entries) {
+    const params = entry.split(";");
+    for (const param of params) {
+      const trimmed = param.trim();
+      if (trimmed.length === 0) return true;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx <= 0) return true;
+      const key = trimmed.slice(0, eqIdx).trim().toLowerCase();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if (val.startsWith('"') && val.endsWith('"') && val.length >= 2) {
+        val = val.slice(1, -1);
+      }
+      if (key === "host" && val.toLowerCase() !== expectedHost) {
+        return true;
+      }
+      if (key === "proto" && val.toLowerCase() !== expectedProto) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isSameOriginRequest(
+  req: Request,
+  proxyPolicy: TrustedProxyPolicy,
+): boolean {
+  const originHeader = getStrictSingleHeader(req, "origin");
+  if (originHeader === null) {
     return false;
   }
 
+  let parsedOrigin: URL;
   try {
-    const parsedOrigin = new URL(originHeader);
-    if (
-      (parsedOrigin.protocol !== "http:" &&
-        parsedOrigin.protocol !== "https:") ||
-      parsedOrigin.username !== "" ||
-      parsedOrigin.password !== "" ||
-      parsedOrigin.origin !== originHeader
-    ) {
-      return false;
-    }
-
-    const forwardedHost = req.headers["x-forwarded-host"];
-    const rawHost =
-      (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost) ??
-      req.headers.host;
-    if (typeof rawHost !== "string" || rawHost.length === 0) {
-      return false;
-    }
-    const requestHost = rawHost.split(",")[0]!.trim();
-    if (parsedOrigin.host !== requestHost) {
-      return false;
-    }
-
-    const forwardedProto = req.headers["x-forwarded-proto"];
-    if (forwardedProto !== undefined) {
-      const rawProto = Array.isArray(forwardedProto)
-        ? forwardedProto[0]
-        : forwardedProto;
-      if (typeof rawProto === "string" && rawProto.length > 0) {
-        const expectedProtocol = `${rawProto.split(",")[0]!.trim()}:`;
-        if (parsedOrigin.protocol !== expectedProtocol) {
-          return false;
-        }
-      }
-    }
-
-    return true;
+    parsedOrigin = new URL(originHeader);
   } catch {
     return false;
   }
+
+  if (
+    (parsedOrigin.protocol !== "http:" &&
+      parsedOrigin.protocol !== "https:") ||
+    parsedOrigin.username !== "" ||
+    parsedOrigin.password !== "" ||
+    parsedOrigin.origin !== originHeader
+  ) {
+    return false;
+  }
+
+  const originProtocol = parsedOrigin.protocol;
+  const hasForwardingHeaders = FORWARDING_HEADER_NAMES.some(
+    (name) => countRawHeaderOccurrences(req, name) > 0,
+  );
+
+  // Direct (non-proxied) request: must match the socket's actual protocol and Host header.
+  if (!hasForwardingHeaders) {
+    const directHost = parseSingleHostHeader(
+      getStrictSingleHeader(req, "host"),
+      originProtocol,
+    );
+    if (directHost === null || parsedOrigin.host !== directHost) {
+      return false;
+    }
+    const socketProtocol = isEncryptedSocket(req) ? "https:" : "http:";
+    return originProtocol === socketProtocol;
+  }
+
+  // Proxied request: reject arbitrary forwarding headers unless arriving via the trusted proxy.
+  if (!proxyPolicy.trustProxy) {
+    return false;
+  }
+  if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
+    return false;
+  }
+
+  const internalHost = parseSingleHostHeader(
+    getStrictSingleHeader(req, "host"),
+    "http:",
+  );
+  if (internalHost === null || internalHost !== proxyPolicy.trustedProxyHost) {
+    return false;
+  }
+
+  if (!isValidSingleIpHeader(getStrictSingleHeader(req, "x-real-ip"))) {
+    return false;
+  }
+  if (!isValidForwardedForHeader(getStrictSingleHeader(req, "x-forwarded-for"))) {
+    return false;
+  }
+
+  const forwardedHost = parseSingleHostHeader(
+    getStrictSingleHeader(req, "x-forwarded-host"),
+    originProtocol,
+  );
+  if (forwardedHost === null || parsedOrigin.host !== forwardedHost) {
+    return false;
+  }
+
+  const forwardedProto = parseSingleForwardedProto(
+    getStrictSingleHeader(req, "x-forwarded-proto"),
+  );
+  if (forwardedProto === null) {
+    return false;
+  }
+
+  if (hasConflictingForwardedHeader(req, forwardedHost, originProtocol)) {
+    return false;
+  }
+
+  const expectedProxyProtocol = `${forwardedProto}:`;
+  if (expectedProxyProtocol === "https:") {
+    // Preserve HTTP downgrade protection when outer/proxy proto is HTTPS.
+    return originProtocol === "https:";
+  }
+
+  // Confirmed Cloud Run (TLS) -> container Nginx (internal HTTP hop resetting X-Forwarded-Proto=http):
+  // permit both matching http: and external https: Origins for the verified host.
+  return originProtocol === "http:" || originProtocol === "https:";
 }
 
 function isJsonContentType(req: Request): boolean {
@@ -260,6 +461,12 @@ export async function createApp(
 ): Promise<Express> {
   const tokenTtlMs = options.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
   const now = options.now ?? (() => Date.now());
+  const proxyPolicy: TrustedProxyPolicy = {
+    trustProxy: options.trustProxy ?? isAiStudioNginxRuntime(),
+    trustedProxyHost:
+      options.trustedProxyHost ??
+      `localhost:${process.env.DEFAULT_APP_PORT ?? String(PORT)}`,
+  };
   const getAiConfig =
     options.getAiConfig ??
     (() => ({
@@ -588,7 +795,7 @@ export async function createApp(
   app.post("/api/ai-review", async (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
 
-    if (!isSameOriginRequest(req)) {
+    if (!isSameOriginRequest(req, proxyPolicy)) {
       res.status(403).json({ error: "The request origin is not allowed." });
       return;
     }
@@ -717,7 +924,7 @@ export async function createApp(
   app.post("/api/meta-review", async (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
 
-    if (!isSameOriginRequest(req)) {
+    if (!isSameOriginRequest(req, proxyPolicy)) {
       res.status(403).json({ error: "The request origin is not allowed." });
       return;
     }

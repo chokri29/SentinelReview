@@ -1,5 +1,10 @@
 import { ApiError } from "@nearai/inference-sdk/node";
-import { createServer, type Server } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type OutgoingHttpHeaders,
+  type Server,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,14 +23,50 @@ const servers: Server[] = [];
 
 async function startTestServer(
   options: ServerAppOptions = {},
-): Promise<{ baseUrl: string; origin: string }> {
+): Promise<{ baseUrl: string; origin: string; port: number }> {
   const app = await createApp({ enableVite: false, ...options });
   const server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   servers.push(server);
   const { port } = server.address() as AddressInfo;
   const origin = `http://127.0.0.1:${port}`;
-  return { baseUrl: origin, origin };
+  return { baseUrl: origin, origin, port };
+}
+
+function sendRawPost(
+  port: number,
+  pathName: string,
+  headers: OutgoingHttpHeaders,
+  body: string,
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        method: "POST",
+        path: pathName,
+        headers: {
+          ...headers,
+          "Content-Length": String(Buffer.byteLength(body, "utf8")),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          resolve({
+            status: res.statusCode ?? 0,
+            json: JSON.parse(text) as Record<string, unknown>,
+          });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
 }
 
 afterEach(async () => {
@@ -1314,6 +1355,431 @@ describe("SentinelReview Express API", () => {
     expect(fixtureAfterJson.report.findings[0]?.findingId).toBe(
       fixtureJson.report.findings[0]?.findingId,
     );
+  });
+
+  it("enforces strict direct vs trusted AI Studio reverse-proxy Origin validation and rejects missing, empty, malformed, duplicate, or untrusted forwarding headers", async () => {
+    const approved = {
+      composeHash: "approved-c",
+      osImageHash: "approved-os",
+    };
+    const modelAtt = {
+      signer: { signingAlgo: "ed25519", signingAddress: "model-signer-1" },
+      tcbStatus: "UpToDate",
+      advisoryIds: [],
+      deployment: {
+        appCompose: "m",
+        runtimeMeasurements: approved,
+      },
+      deploymentProvenance: "verified",
+      report: {},
+      gpuEvidence: "verified",
+      signingPublicKey: "pub-key",
+    };
+    const gatewayAtt = {
+      signer: { signingAlgo: "ed25519", signingAddress: "gw-signer-1" },
+      tcbStatus: "UpToDate",
+      advisoryIds: [],
+      deployment: {
+        appCompose: "gw",
+        runtimeMeasurements: { composeHash: "g1", osImageHash: "g2" },
+      },
+      deploymentProvenance: "verified",
+      report: {},
+      tlsBinding: {
+        kind: "attested",
+        spkiFingerprint: "gw-spki-fp-1",
+      },
+    };
+
+    const metaFetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: "meta-proxy-ok",
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({ findings: [] }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const trustedServer = await startTestServer({
+      trustProxy: true,
+      trustedProxyHost: "localhost:3000",
+      getAiConfig: () => ({
+        apiKey: "test-near-key",
+        composeHash: approved.composeHash,
+        osImageHash: approved.osImageHash,
+      }),
+      createAiAdapter: () =>
+        createNearAiAdapter({
+          approvedModelDeployments: [approved],
+          getApiKey: () => "test-near-key",
+          createClient: () => ({
+            verify: async () => ({
+              gateway: gatewayAtt,
+              models: [modelAtt],
+              verifiedAt: Date.now(),
+            }),
+            createChatCompletion: async () => ({
+              id: "near-proxy-ok",
+              choices: [{ message: { content: JSON.stringify({ findings: [] }) } }],
+            }),
+            verifyResponse: async () => ({
+              id: "near-proxy-ok",
+              completionId: "near-proxy-ok",
+              signatureKind: "provider_tee",
+              signature: {
+                kind: "provider_tee",
+                signer: {
+                  signingAlgo: "ed25519",
+                  signingAddress: "model-signer-1",
+                },
+                signedText: "{}",
+                signature: "sig",
+              },
+              attestations: [modelAtt],
+              attestation: modelAtt,
+            }),
+          }),
+        }),
+      getMetaConfig: () => ({ apiKey: "test-meta-key" }),
+      createMetaAdapter: () =>
+        createMetaModelAdapter({
+          getApiKey: () => "test-meta-key",
+          fetchFn: metaFetch,
+        }),
+    });
+
+    const proxyHost = "preview-host.example.run.app";
+    const httpsOrigin = `https://${proxyHost}`;
+    const httpOrigin = `http://${proxyHost}`;
+
+    const rev = (await fetch(
+      `${trustedServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+      metaConfig: { consentToken: string };
+    };
+
+    const aiBody = JSON.stringify({
+      sourceKind: "fixture",
+      fixture: "triggering",
+      snapshotHash: rev.report.snapshot.sourceHash,
+      token: rev.consentToken,
+    });
+    const metaBody = JSON.stringify({
+      sourceKind: "fixture",
+      fixture: "triggering",
+      snapshotHash: rev.report.snapshot.sourceHash,
+      token: rev.metaConfig.consentToken,
+    });
+
+    const validProxyHeaders: OutgoingHttpHeaders = {
+      Host: "localhost:3000",
+      Origin: httpsOrigin,
+      "X-Forwarded-Host": proxyHost,
+      "X-Forwarded-Proto": "http",
+      "X-Real-IP": "203.0.113.10",
+      "X-Forwarded-For": "203.0.113.10, 10.0.0.1",
+      "Content-Type": "application/json",
+      "x-sentinelreview-ai-consent": "1",
+    };
+
+    // 1. Negative proxy header cases MUST all return 403 before consuming tokens:
+    // Missing X-Forwarded-Proto
+    const { ["X-Forwarded-Proto"]: _omitProto, ...missingProtoHeaders } =
+      validProxyHeaders;
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          missingProtoHeaders,
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+
+    // Empty or whitespace X-Forwarded-Proto
+    for (const emptyProto of ["", "   "]) {
+      expect(
+        (
+          await sendRawPost(
+            trustedServer.port,
+            "/api/ai-review",
+            { ...validProxyHeaders, "X-Forwarded-Proto": emptyProto },
+            aiBody,
+          )
+        ).status,
+      ).toBe(403);
+    }
+
+    // Malformed X-Forwarded-Proto
+    for (const badProto of ["ftp", "https:", "http://", "HTTPS", "ws"]) {
+      expect(
+        (
+          await sendRawPost(
+            trustedServer.port,
+            "/api/ai-review",
+            { ...validProxyHeaders, "X-Forwarded-Proto": badProto },
+            aiBody,
+          )
+        ).status,
+      ).toBe(403);
+    }
+
+    // Multiple / duplicated X-Forwarded-Proto values (comma-separated & multi-header array)
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          { ...validProxyHeaders, "X-Forwarded-Proto": "http, https" },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          { ...validProxyHeaders, "X-Forwarded-Proto": ["http", "http"] },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+
+    // Missing / empty / multiple / duplicated X-Forwarded-Host
+    const { ["X-Forwarded-Host"]: _omitHost, ...missingHostHeaders } =
+      validProxyHeaders;
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          missingHostHeaders,
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          { ...validProxyHeaders, "X-Forwarded-Host": "" },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          {
+            ...validProxyHeaders,
+            "X-Forwarded-Host": `${proxyHost}, other.example`,
+          },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          {
+            ...validProxyHeaders,
+            "X-Forwarded-Host": [proxyHost, proxyHost],
+          },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+
+    // Conflicting Forwarded header or missing X-Real-IP / X-Forwarded-For / wrong internal Host
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          {
+            ...validProxyHeaders,
+            Forwarded: `for=203.0.113.10;host=other.example;proto=http`,
+          },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+    const { ["X-Real-IP"]: _omitRealIp, ...missingRealIpHeaders } =
+      validProxyHeaders;
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          missingRealIpHeaders,
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          {
+            ...validProxyHeaders,
+            Host: `127.0.0.1:${trustedServer.port}`,
+          },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+
+    // Scheme downgrade (http Origin under X-Forwarded-Proto: https) rejected
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          {
+            ...validProxyHeaders,
+            Origin: httpOrigin,
+            "X-Forwarded-Proto": "https",
+          },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+
+    // Cross-origin host rejected
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/meta-review",
+          {
+            ...validProxyHeaders,
+            Origin: "https://evil.example",
+            "x-sentinelreview-meta-consent": "1",
+          },
+          metaBody,
+        )
+      ).status,
+    ).toBe(403);
+
+    // Direct request claiming https Origin over plain HTTP socket rejected
+    expect(
+      (
+        await sendRawPost(
+          trustedServer.port,
+          "/api/ai-review",
+          {
+            Host: `127.0.0.1:${trustedServer.port}`,
+            Origin: `https://127.0.0.1:${trustedServer.port}`,
+            "Content-Type": "application/json",
+            "x-sentinelreview-ai-consent": "1",
+          },
+          aiBody,
+        )
+      ).status,
+    ).toBe(403);
+
+    // 2. Legitimate Cloud Run -> Nginx HTTPS-to-HTTP path succeeds for both /api/ai-review and /api/meta-review
+    const nearRes = await sendRawPost(
+      trustedServer.port,
+      "/api/ai-review",
+      validProxyHeaders,
+      aiBody,
+    );
+    expect(nearRes.status).toBe(200);
+    expect(
+      (nearRes.json.execution as { aiInference: string; sourceTransmission: string })
+        .aiInference,
+    ).toBe("complete");
+    expect(
+      (nearRes.json.execution as { sourceTransmission: string }).sourceTransmission,
+    ).toBe("attempted");
+
+    const { ["x-sentinelreview-ai-consent"]: _omitNearConsent, ...metaProxyBase } =
+      validProxyHeaders;
+    const metaRes = await sendRawPost(
+      trustedServer.port,
+      "/api/meta-review",
+      {
+        ...metaProxyBase,
+        "x-sentinelreview-meta-consent": "1",
+      },
+      metaBody,
+    );
+    expect(metaRes.status).toBe(200);
+    expect(
+      (metaRes.json.execution as { aiInference: string; sourceTransmission: string })
+        .aiInference,
+    ).toBe("completed");
+    expect(
+      (metaRes.json.execution as { sourceTransmission: string }).sourceTransmission,
+    ).toBe("attempted");
+
+    // 3. When trustProxy is false, arbitrary client-supplied forwarding headers are ALWAYS rejected (403),
+    // while genuine direct HTTP requests still succeed.
+    const untrustedProxyServer = await startTestServer({
+      trustProxy: false,
+    });
+    const revDirect = (await fetch(
+      `${untrustedProxyServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+    };
+    const directBody = JSON.stringify({
+      sourceKind: "fixture",
+      fixture: "triggering",
+      snapshotHash: revDirect.report.snapshot.sourceHash,
+      token: revDirect.consentToken,
+    });
+
+    const spoofedProxyRes = await sendRawPost(
+      untrustedProxyServer.port,
+      "/api/ai-review",
+      {
+        Host: "localhost:3000",
+        Origin: httpsOrigin,
+        "X-Forwarded-Host": proxyHost,
+        "X-Forwarded-Proto": "http",
+        "X-Real-IP": "203.0.113.10",
+        "X-Forwarded-For": "203.0.113.10",
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      directBody,
+    );
+    expect(spoofedProxyRes.status).toBe(403);
+
+    const directOkRes = await fetch(
+      `${untrustedProxyServer.baseUrl}/api/ai-review`,
+      {
+        method: "POST",
+        headers: {
+          Origin: untrustedProxyServer.origin,
+          "Content-Type": "application/json",
+          "x-sentinelreview-ai-consent": "1",
+        },
+        body: directBody,
+      },
+    );
+    expect(directOkRes.status).toBe(200);
   });
 });
 

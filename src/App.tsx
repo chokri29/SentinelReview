@@ -20,6 +20,30 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+async function parseJsonApiResponse<T>(
+  res: Response,
+  endpointLabel: string,
+): Promise<T> {
+  const contentType = res.headers.get("content-type")?.trim() || "unknown";
+  const rawText = await res.text();
+  if (!/application\/json/i.test(contentType)) {
+    throw new Error(
+      `Unexpected non-JSON response from ${endpointLabel} (HTTP ${res.status}, content-type: ${contentType}).`,
+    );
+  }
+  try {
+    const parsed: unknown = JSON.parse(rawText);
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error("Invalid JSON object");
+    }
+    return parsed as T;
+  } catch {
+    throw new Error(
+      `Invalid JSON payload from ${endpointLabel} (HTTP ${res.status}, content-type: ${contentType}).`,
+    );
+  }
+}
+
 export default function App() {
   const [activeFixture, setActiveFixture] = useState<FixtureName>("triggering");
   const [customPanelOpen, setCustomPanelOpen] = useState(false);
@@ -114,7 +138,9 @@ export default function App() {
             signal: controller.signal,
           },
         );
-        const payload = (await res.json()) as ReviewResponse & { error?: string };
+        const payload = await parseJsonApiResponse<
+          ReviewResponse & { error?: string }
+        >(res, "/api/review");
         if (seq !== reviewRequestSeqRef.current) return;
         if (!res.ok) {
           throw new Error(payload.error ?? "Failed to load fixture review.");
@@ -179,7 +205,9 @@ export default function App() {
         body: JSON.stringify({ files }),
         signal: controller.signal,
       });
-      const payload = (await res.json()) as ReviewResponse & { error?: string };
+      const payload = await parseJsonApiResponse<
+        ReviewResponse & { error?: string }
+      >(res, "/api/review/custom");
       if (seq !== reviewRequestSeqRef.current) return;
       if (!res.ok) {
         throw new Error(payload.error ?? "Failed to analyze custom Rust snapshot.");
@@ -230,10 +258,12 @@ export default function App() {
         setTokenConsumed(true);
         setConsentChecked(false);
       }
-      const payload = (await res.json()) as AiAnalysisResponse & {
-        error?: string;
-        errorCode?: string;
-      };
+      const payload = await parseJsonApiResponse<
+        AiAnalysisResponse & {
+          error?: string;
+          errorCode?: string;
+        }
+      >(res, "/api/ai-review");
       if (seq !== aiRequestSeqRef.current) return;
       if (!res.ok) {
         const baseMessage = payload.error ?? "Optional NEAR AI request failed.";
@@ -300,10 +330,12 @@ export default function App() {
         setMetaTokenConsumed(true);
         setMetaConsentChecked(false);
       }
-      const payload = (await res.json()) as MetaAnalysisResponse & {
-        error?: string;
-        errorCode?: string;
-      };
+      const payload = await parseJsonApiResponse<
+        MetaAnalysisResponse & {
+          error?: string;
+          errorCode?: string;
+        }
+      >(res, "/api/meta-review");
       if (seq !== metaRequestSeqRef.current) return;
       if (!res.ok) {
         const baseMessage =
