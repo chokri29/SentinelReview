@@ -223,7 +223,7 @@ export function NearAiPanel({
                     <span
                       title={
                         matchingAiResponse.execution.sourceTransmission === "attempted"
-                          ? "Source-bearing payload was handed to the NEAR AI SDK; network delivery is unverified."
+                          ? "A source-bearing request was attempted at the SDK call boundary; network delivery is unverified."
                           : "No source-bearing inference request was attempted."
                       }
                       className={`font-mono ${verificationTone(

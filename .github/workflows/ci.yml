@@ -30,10 +30,8 @@ jobs:
         with:
           node-version: 24
 
-      # The current package-lock.json is out of sync with package.json.
-      # Use npm install until the lockfile is reconciled; then switch to npm ci.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci
 
       - name: Typecheck
         run: npm run typecheck
