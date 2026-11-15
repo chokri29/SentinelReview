@@ -665,7 +665,7 @@ export async function createApp(
       sourceKind,
       ...(fixture ? { fixture } : {}),
       execution: {
-        mode: "local_deterministic_only",
+        mode: "deterministic_only",
         aiInference: "not_run",
         sourceTransmission: "none",
       },
@@ -933,7 +933,7 @@ export async function createApp(
         apiKeyConfigured: hasApiKeyConfigured(),
         independentNearApproval: "not_established",
         execution: {
-          mode: "local_deterministic_plus_near_ai",
+          mode: "deterministic_plus_near_ai",
           aiInference: aiResult.status,
           sourceTransmission,
         },
@@ -996,13 +996,8 @@ export async function createApp(
 
     const { sourceKind, fixture, snapshotHash, token } = parsed.data;
 
-    // Single-use Meta token removal occurs synchronously before any awaited work.
-    const tokenRecord = metaConsentTokens.get(token);
-    if (tokenRecord) {
-      metaConsentTokens.delete(token);
-    }
-
     // Server-side restriction: private/custom Rust source is never sent to Meta Model API.
+    // Reject before reading or deleting metaConsentTokens so a valid fixture token is preserved.
     if (sourceKind !== "fixture") {
       res.status(403).json({
         error:
@@ -1011,7 +1006,7 @@ export async function createApp(
         provider: META_PROVIDER_NAME,
         modelId: META_MODEL_ID,
         execution: {
-          mode: "local_deterministic_plus_meta_model",
+          mode: "deterministic_plus_meta_model",
           provider: META_PROVIDER_NAME,
           modelId: META_MODEL_ID,
           aiInference: "failed",
@@ -1019,6 +1014,12 @@ export async function createApp(
         },
       });
       return;
+    }
+
+    // Single-use Meta token removal occurs synchronously before any awaited work.
+    const tokenRecord = metaConsentTokens.get(token);
+    if (tokenRecord) {
+      metaConsentTokens.delete(token);
     }
 
     if (!tokenRecord || tokenRecord.expiresAt <= now()) {
@@ -1052,7 +1053,7 @@ export async function createApp(
           error:
             "The fixture snapshot changed since review; re-run deterministic review and confirm again.",
           execution: {
-            mode: "local_deterministic_plus_meta_model",
+            mode: "deterministic_plus_meta_model",
             provider: META_PROVIDER_NAME,
             modelId: META_MODEL_ID,
             aiInference: "unavailable",
@@ -1082,7 +1083,7 @@ export async function createApp(
         snapshotHash: snapshot.manifest.sourceHash,
         apiKeyConfigured: hasMetaApiKeyConfigured(),
         execution: {
-          mode: "local_deterministic_plus_meta_model",
+          mode: "deterministic_plus_meta_model",
           provider: META_PROVIDER_NAME,
           modelId: META_MODEL_ID,
           aiInference: metaResult.status,
@@ -1101,7 +1102,7 @@ export async function createApp(
         provider: META_PROVIDER_NAME,
         modelId: META_MODEL_ID,
         execution: {
-          mode: "local_deterministic_plus_meta_model",
+          mode: "deterministic_plus_meta_model",
           provider: META_PROVIDER_NAME,
           modelId: META_MODEL_ID,
           aiInference: "failed",

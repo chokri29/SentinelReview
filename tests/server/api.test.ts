@@ -1874,6 +1874,103 @@ describe("SentinelReview Express API", () => {
     expect(body.execution.aiInference).toBe("failed");
     expect(body.execution.sourceTransmission).toBe("attempted");
   });
+
+  it("does not burn a valid Meta consent token when custom source is rejected with private_source_rejected", async () => {
+    const metaFetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: "meta-cmpl-preserve-token",
+          model: META_MODEL_ID,
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  findings: [],
+                }),
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const { baseUrl, origin } = await startTestServer({
+      getMetaConfig: () => ({ apiKey: "test-meta-key" }),
+      createMetaAdapter: () =>
+        createMetaModelAdapter({
+          getApiKey: () => "test-meta-key",
+          fetchFn: metaFetch,
+        }),
+    });
+
+    const fixtureRes = await fetch(`${baseUrl}/api/review?fixture=triggering`);
+    expect(fixtureRes.status).toBe(200);
+    const fixtureJson = (await fixtureRes.json()) as {
+      report: { snapshot: { sourceHash: string } };
+      metaConfig: { consentToken?: string };
+    };
+    const metaToken = fixtureJson.metaConfig.consentToken;
+    expect(metaToken).toMatch(/^[a-f0-9]{64}$/);
+    const snapshotHash = fixtureJson.report.snapshot.sourceHash;
+
+    const rejectedCustomRes = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "custom",
+        snapshotHash,
+        token: metaToken,
+      }),
+    });
+    expect(rejectedCustomRes.status).toBe(403);
+    const rejectedCustomJson = (await rejectedCustomRes.json()) as {
+      errorCode: string;
+      execution: { mode: string; sourceTransmission: string };
+    };
+    expect(rejectedCustomJson.errorCode).toBe("private_source_rejected");
+    expect(rejectedCustomJson.execution.mode).toBe(
+      "deterministic_plus_meta_model",
+    );
+    expect(rejectedCustomJson.execution.sourceTransmission).toBe("none");
+    expect(metaFetch).not.toHaveBeenCalled();
+
+    const validFixtureRes = await fetch(`${baseUrl}/api/meta-review`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-meta-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash,
+        token: metaToken,
+      }),
+    });
+    expect(validFixtureRes.status).toBe(200);
+    const validFixtureJson = (await validFixtureRes.json()) as {
+      execution: {
+        mode: string;
+        aiInference: string;
+        sourceTransmission: string;
+      };
+    };
+    expect(validFixtureJson.execution.mode).toBe(
+      "deterministic_plus_meta_model",
+    );
+    expect(validFixtureJson.execution.aiInference).toBe("completed");
+    expect(validFixtureJson.execution.sourceTransmission).toBe("attempted");
+    expect(metaFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 

@@ -304,7 +304,7 @@ The automated tests use mocks and fixtures for provider adapter and API policy b
 - Do not submit secrets, credentials, private keys, or source you are not authorized to share.
 - NEAR AI transmission is a separate action requiring explicit consent and successful server-side policy checks.
 - Meta Model API is restricted to bundled public/synthetic fixtures; custom/private source is blocked server-side.
-- Keep all API keys in server-side environment secrets. Never put keys in React code, browser storage, committed files, screenshots, or public issue reports.
+- Keep all API keys in server-side environment secrets. Never put keys in React code, browser storage, committed files, screenshots, or public issue reports. Do not set NEARAI_API_KEY or META_MODEL_API_KEY on a publicly reachable deployment unless that deployment is access-controlled. Any visitor can obtain a consent token and spend the key; the consent check only stops a different website from posting silently.
 - AI-generated content is a hypothesis, not a verified vulnerability. Human review and independent testing remain necessary.
 - A matching source hash is not encryption, provenance, authorship, or proof that the source is safe.
 - Missing, failed, unavailable, inconclusive, partial and not-run statuses must remain visible; never silently convert them into passing states.

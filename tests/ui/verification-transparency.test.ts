@@ -20,7 +20,7 @@ function toReviewResponse(
   return {
     sourceKind: "custom",
     execution: {
-      mode: "local_deterministic_only",
+      mode: "deterministic_only",
       aiInference: "not_run",
       sourceTransmission: "none",
     },
