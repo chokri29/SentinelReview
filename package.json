@@ -7,7 +7,7 @@
     "node": ">=24.22.1"
   },
   "scripts": {
-    "dev": "SENTINELREVIEW_DIAGNOSE_NEARAI_MODEL=1 tsx server.ts",
+    "dev": "tsx server.ts",
     "start": "NODE_ENV=production tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
