@@ -162,15 +162,24 @@ export interface NearAiChatRequest {
   }>;
 }
 
+export interface NearAiChatRequestOptions {
+  readonly signal?: AbortSignal;
+}
+
 export interface NearAiClient {
   verify(model: string): Promise<unknown>;
-  createChatCompletion(request: NearAiChatRequest): Promise<unknown>;
+  createChatCompletion(
+    request: NearAiChatRequest,
+    options?: NearAiChatRequestOptions,
+  ): Promise<unknown>;
   verifyResponse(id: string): Promise<unknown>;
 }
 
 export interface NearAiRunOptions {
   /** Called synchronously at the outbound completion-request boundary. */
   readonly onSourceTransmission?: () => void;
+  /** Optional cancellation signal propagated to client.chat.completions.create(). */
+  readonly signal?: AbortSignal;
 }
 
 export interface NearAiAdapterDependencies {
@@ -199,8 +208,13 @@ function defaultClientFactory(
   const client = new InferenceClient(options);
   return {
     verify: (model) => client.verify(model),
-    createChatCompletion: (request) =>
-      client.chat.completions.create(request),
+    createChatCompletion: (request, requestOptions) =>
+      client.chat.completions.create(
+        request,
+        requestOptions?.signal === undefined
+          ? undefined
+          : { signal: requestOptions.signal },
+      ),
     verifyResponse: (id) => client.verifyResponse(id),
   };
 }
@@ -1207,6 +1221,21 @@ export function createNearAiAdapter(
       });
     }
 
+    if (runOptions.signal?.aborted) {
+      return buildResult({
+        status: "failed",
+        coverage: "not_run",
+        errorCode: "inference_failed",
+        provenance: {
+          ...provenance,
+          privateModelPolicy: "unavailable",
+        },
+        limitations: [
+          "The NEAR AI request was aborted before inference began; no source was sent.",
+        ],
+      });
+    }
+
     let attestation: unknown;
     try {
       attestation = await client.verify(NEAR_AI_MODEL_ID);
@@ -1358,18 +1387,52 @@ export function createNearAiAdapter(
       });
     }
 
+    if (runOptions.signal?.aborted) {
+      return buildResult({
+        status: "failed",
+        coverage: "not_run",
+        errorCode: "inference_failed",
+        provenance: {
+          ...provenance,
+          privateModelPolicy: "unavailable",
+        },
+        limitations: [
+          "The NEAR AI request was aborted before source transmission; no AI findings were accepted.",
+        ],
+      });
+    }
+
     let completion: unknown;
     try {
       // This callback marks the exact boundary immediately before source-bearing
       // prompt data is handed to the SDK for outbound transmission.
       runOptions.onSourceTransmission?.();
-      completion = await client.createChatCompletion({
-        model: NEAR_AI_MODEL_ID,
-        max_tokens: MAX_COMPLETION_TOKENS,
-        stream: false,
-        messages,
-      });
+      completion = await client.createChatCompletion(
+        {
+          model: NEAR_AI_MODEL_ID,
+          max_tokens: MAX_COMPLETION_TOKENS,
+          stream: false,
+          messages,
+        },
+        runOptions.signal === undefined
+          ? undefined
+          : { signal: runOptions.signal },
+      );
     } catch (error) {
+      if (runOptions.signal?.aborted) {
+        return buildResult({
+          status: "failed",
+          coverage: "incomplete",
+          errorCode: "inference_failed",
+          provenance: {
+            ...provenance,
+            privateModelPolicy: "unavailable",
+          },
+          limitations: [
+            "The NEAR AI inference request was aborted; no AI findings were accepted.",
+          ],
+        });
+      }
       const classified = classifyNearAiOperationalError(error, "inference");
       return buildResult({
         status: "failed",
@@ -1406,6 +1469,21 @@ export function createNearAiAdapter(
     }
 
     provenance = { ...provenance, responseId };
+    if (runOptions.signal?.aborted) {
+      return buildResult({
+        status: "failed",
+        coverage: "incomplete",
+        errorCode: "inference_failed",
+        provenance: {
+          ...provenance,
+          privateModelPolicy: "unavailable",
+        },
+        limitations: [
+          "The NEAR AI request was aborted before response verification; no AI findings were accepted.",
+        ],
+      });
+    }
+
     let verified: unknown;
     try {
       verified = await client.verifyResponse(responseId);

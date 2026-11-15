@@ -759,4 +759,100 @@ describe("createNearAiAdapter policy and verification", () => {
     expect(transmitted).toBe(false);
     expect(createChatCompletion).not.toHaveBeenCalled();
   });
+
+  it("propagates AbortSignal to createChatCompletion and avoids transmitting source when aborted during preflight", async () => {
+    const snapshot = makeSampleSnapshot();
+    const rule = runNearRustCallbackPrivateRule(snapshot);
+    const modelAtt = makeModelAttestation();
+
+    // 1. In-flight createChatCompletion receives signal and classifies abort as inference_failed
+    const inFlightController = new AbortController();
+    let capturedSignal: AbortSignal | undefined;
+    let transmitted = false;
+    const inFlightAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "test-key",
+      createClient: () => ({
+        verify: async () => ({
+          gateway: makeGatewayAttestation(),
+          models: [modelAtt],
+          verifiedAt: Date.now(),
+        }),
+        createChatCompletion: async (_request, requestOptions) => {
+          capturedSignal = requestOptions?.signal;
+          return new Promise((_resolve, reject) => {
+            requestOptions?.signal?.addEventListener(
+              "abort",
+              () => {
+                reject(
+                  new ApiError({
+                    code: "api.transport_failed",
+                    details: { resource: "completion", reason: "request" },
+                    retryable: true,
+                  }),
+                );
+              },
+              { once: true },
+            );
+            inFlightController.abort();
+          });
+        },
+        verifyResponse: vi.fn(),
+      }),
+    });
+
+    const inFlightRes = await inFlightAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+      {
+        onSourceTransmission: () => {
+          transmitted = true;
+        },
+        signal: inFlightController.signal,
+      },
+    );
+    expect(capturedSignal).toBe(inFlightController.signal);
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(transmitted).toBe(true);
+    expect(inFlightRes.status).toBe("failed");
+    expect(inFlightRes.coverage).toBe("incomplete");
+    expect(inFlightRes.errorCode).toBe("inference_failed");
+
+    // 2. Abort triggered during verify() prevents onSourceTransmission and createChatCompletion
+    const preflightController = new AbortController();
+    const createChatCompletionNever = vi.fn();
+    let preflightTransmitted = false;
+    const preflightAbortAdapter = createNearAiAdapter({
+      approvedModelDeployments: [APPROVED_DEPLOYMENT],
+      getApiKey: () => "test-key",
+      createClient: () => ({
+        verify: async () => {
+          preflightController.abort();
+          return {
+            gateway: makeGatewayAttestation(),
+            models: [modelAtt],
+            verifiedAt: Date.now(),
+          };
+        },
+        createChatCompletion: createChatCompletionNever,
+        verifyResponse: vi.fn(),
+      }),
+    });
+
+    const preflightRes = await preflightAbortAdapter(
+      snapshot,
+      rule.deterministicAnalysis.findings,
+      {
+        onSourceTransmission: () => {
+          preflightTransmitted = true;
+        },
+        signal: preflightController.signal,
+      },
+    );
+    expect(preflightTransmitted).toBe(false);
+    expect(createChatCompletionNever).not.toHaveBeenCalled();
+    expect(preflightRes.status).toBe("failed");
+    expect(preflightRes.coverage).toBe("not_run");
+    expect(preflightRes.errorCode).toBe("inference_failed");
+  });
 });

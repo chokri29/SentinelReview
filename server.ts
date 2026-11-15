@@ -894,10 +894,18 @@ export async function createApp(
       }
 
       const ruleResult = runNearRustCallbackPrivateRule(snapshot);
+      const aiController = new AbortController();
       let aiTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
       const aiTimeout = new Promise<never>((_, reject) => {
         aiTimeoutHandle = setTimeout(() => {
-          reject(new NearAiRouteTimeoutError());
+          const timeoutError = new NearAiRouteTimeoutError();
+          // Reject the route race first so timeout always returns 504 even if
+          // abort listeners settle synchronously, then abort any in-flight
+          // createChatCompletion HTTP request. SDK verify() and verifyResponse()
+          // do not accept AbortSignal, and aborting the client socket does not
+          // guarantee cancelling provider-side work already started.
+          reject(timeoutError);
+          aiController.abort(timeoutError);
         }, aiRouteTimeoutMs);
       });
 
@@ -908,6 +916,7 @@ export async function createApp(
             onSourceTransmission: () => {
               sourceTransmission = "attempted";
             },
+            signal: aiController.signal,
           }),
           aiTimeout,
         ]);

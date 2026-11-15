@@ -1823,6 +1823,57 @@ describe("SentinelReview Express API", () => {
     expect(body.execution.aiInference).toBe("failed");
     expect(body.execution.sourceTransmission).toBe("attempted");
   });
+
+  it("aborts the propagated AbortSignal when POST /api/ai-review times out", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const timeoutServer = await startTestServer({
+      aiRouteTimeoutMs: 20,
+      createAiAdapter: () => (_snapshot, _findings, runOptions) => {
+        observedSignal = runOptions?.signal;
+        runOptions?.onSourceTransmission?.();
+        return new Promise((_resolve, reject) => {
+          runOptions?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted")),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const reviewRes = (await fetch(
+      `${timeoutServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+    };
+
+    const aiRes = await fetch(`${timeoutServer.baseUrl}/api/ai-review`, {
+      method: "POST",
+      headers: {
+        Origin: timeoutServer.origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: reviewRes.report.snapshot.sourceHash,
+        token: reviewRes.consentToken,
+      }),
+    });
+
+    expect(aiRes.status).toBe(504);
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal?.aborted).toBe(true);
+    const body = (await aiRes.json()) as {
+      errorCode?: string;
+      execution: { aiInference: string; sourceTransmission: string };
+    };
+    expect(body.errorCode).toBe("inference_failed");
+    expect(body.execution.aiInference).toBe("failed");
+    expect(body.execution.sourceTransmission).toBe("attempted");
+  });
 });
 
 
