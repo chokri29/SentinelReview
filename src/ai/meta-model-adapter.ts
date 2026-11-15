@@ -615,6 +615,7 @@ export function createMetaModelAdapter(
         },
         body: requestBody,
         signal: controller.signal,
+        redirect: "error",
       });
     } catch (error) {
       clearTimeout(timeoutHandle);

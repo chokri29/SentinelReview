@@ -53,6 +53,14 @@ const CONSENT_HEADER = "x-sentinelreview-ai-consent";
 const CONSENT_HEADER_VALUE = "1";
 const META_CONSENT_HEADER = "x-sentinelreview-meta-consent";
 const META_CONSENT_HEADER_VALUE = "1";
+export const DEFAULT_NEAR_AI_ROUTE_TIMEOUT_MS = 120_000;
+
+class NearAiRouteTimeoutError extends Error {
+  constructor() {
+    super("The NEAR AI review timed out; no AI findings were accepted.");
+    this.name = "NearAiRouteTimeoutError";
+  }
+}
 export const DEFAULT_TOKEN_TTL_MS = 2 * 60 * 1000;
 const MAX_CONSENT_TOKENS = 500;
 const CUSTOM_SNAPSHOT_TTL_MS = 30 * 60 * 1000;
@@ -100,6 +108,7 @@ export interface ServerAppOptions {
     readonly apiKey?: string;
   };
   readonly createMetaAdapter?: () => ReturnType<typeof createMetaModelAdapter>;
+  readonly aiRouteTimeoutMs?: number;
   readonly now?: () => number;
 }
 
@@ -460,6 +469,8 @@ export async function createApp(
   options: ServerAppOptions = {},
 ): Promise<Express> {
   const tokenTtlMs = options.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
+  const aiRouteTimeoutMs =
+    options.aiRouteTimeoutMs ?? DEFAULT_NEAR_AI_ROUTE_TIMEOUT_MS;
   const now = options.now ?? (() => Date.now());
   const proxyPolicy: TrustedProxyPolicy = {
     trustProxy: options.trustProxy ?? isAiStudioNginxRuntime(),
@@ -883,15 +894,26 @@ export async function createApp(
       }
 
       const ruleResult = runNearRustCallbackPrivateRule(snapshot);
-      const aiResult: NearAiAnalysisResult = await createAdapter()(
-        snapshot,
-        ruleResult.deterministicAnalysis.findings,
-        {
-          onSourceTransmission: () => {
-            sourceTransmission = "attempted";
-          },
-        },
-      );
+      let aiTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const aiTimeout = new Promise<never>((_, reject) => {
+        aiTimeoutHandle = setTimeout(() => {
+          reject(new NearAiRouteTimeoutError());
+        }, aiRouteTimeoutMs);
+      });
+
+      let aiResult: NearAiAnalysisResult;
+      try {
+        aiResult = await Promise.race([
+          createAdapter()(snapshot, ruleResult.deterministicAnalysis.findings, {
+            onSourceTransmission: () => {
+              sourceTransmission = "attempted";
+            },
+          }),
+          aiTimeout,
+        ]);
+      } finally {
+        clearTimeout(aiTimeoutHandle);
+      }
 
       res.json({
         sourceKind,
@@ -909,6 +931,18 @@ export async function createApp(
         aiAnalysis: aiResult,
       });
     } catch (error) {
+      if (error instanceof NearAiRouteTimeoutError) {
+        console.error(
+          "[SentinelReview] Optional NEAR AI review failed (code=inference_failed, timeout).",
+        );
+        res.status(504).json({
+          error: "The NEAR AI review timed out; no AI findings were accepted.",
+          errorCode: "inference_failed",
+          execution: { aiInference: "failed", sourceTransmission },
+        });
+        return;
+      }
+
       const sanitized = classifyNearAiOperationalError(error, "inference");
       console.error(
         `[SentinelReview] Optional NEAR AI review failed (code=${sanitized.code}).`,

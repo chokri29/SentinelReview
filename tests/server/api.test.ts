@@ -1781,6 +1781,48 @@ describe("SentinelReview Express API", () => {
     );
     expect(directOkRes.status).toBe(200);
   });
+
+  it("returns 504 with inference_failed and attempted transmission when NEAR AI adapter times out", async () => {
+    const timeoutServer = await startTestServer({
+      aiRouteTimeoutMs: 20,
+      createAiAdapter: () => (_snapshot, _findings, runOptions) => {
+        runOptions?.onSourceTransmission?.();
+        return new Promise<never>(() => {});
+      },
+    });
+
+    const reviewRes = (await fetch(
+      `${timeoutServer.baseUrl}/api/review?fixture=triggering`,
+    ).then((r) => r.json())) as {
+      report: { snapshot: { sourceHash: string } };
+      consentToken: string;
+    };
+
+    const aiRes = await fetch(`${timeoutServer.baseUrl}/api/ai-review`, {
+      method: "POST",
+      headers: {
+        Origin: timeoutServer.origin,
+        "Content-Type": "application/json",
+        "x-sentinelreview-ai-consent": "1",
+      },
+      body: JSON.stringify({
+        sourceKind: "fixture",
+        fixture: "triggering",
+        snapshotHash: reviewRes.report.snapshot.sourceHash,
+        token: reviewRes.consentToken,
+      }),
+    });
+
+    expect(aiRes.status).toBe(504);
+    const body = (await aiRes.json()) as {
+      error: string;
+      errorCode?: string;
+      execution: { aiInference: string; sourceTransmission: string };
+    };
+    expect(body.errorCode).toBe("inference_failed");
+    expect(body.execution.aiInference).toBe("failed");
+    expect(body.execution.sourceTransmission).toBe("attempted");
+  });
 });
 
 
