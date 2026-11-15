@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +40,7 @@ import {
   type SourceLoadOptions,
   type SourceLoadResult,
 } from "./src/source/load-source.js";
+import { runNearAiModelMetadataDiagnostic } from "./scripts/check-nearai-model-metadata.js";
 
 type FixtureName = "triggering" | "safe";
 type SourceKind = "fixture" | "custom";
@@ -1160,17 +1162,63 @@ export async function createApp(
   return app;
 }
 
+const DIAGNOSTIC_FLAG_ENV = "SENTINELREVIEW_DIAGNOSE_NEARAI_MODEL";
+const DIAGNOSTIC_FLAG_ARG = "--diagnose-nearai-model";
+const DIAGNOSTIC_OUTPUT_PATH =
+  "/tmp/sentinelreview-nearai-metadata-diagnostic.txt";
+
+let nearAiMetadataDiagnosticStarted = false;
+let nearAiMetadataDiagnosticRunning = false;
+
+async function runOneTimeNearAiMetadataDiagnostic(): Promise<void> {
+  if (nearAiMetadataDiagnosticStarted || nearAiMetadataDiagnosticRunning) {
+    return;
+  }
+  nearAiMetadataDiagnosticStarted = true;
+  nearAiMetadataDiagnosticRunning = true;
+  try {
+    const lines: string[] = [];
+    await runNearAiModelMetadataDiagnostic({
+      writeLine: (line) => {
+        lines.push(line);
+        console.log(line);
+      },
+      writeErrorLine: (line) => {
+        lines.push(line);
+        console.error(line);
+      },
+    });
+    if (lines.length === 3) {
+      await writeFile(DIAGNOSTIC_OUTPUT_PATH, `${lines.join("\n")}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    }
+  } catch {
+    // Fail closed without logging secrets, headers, or raw errors.
+  } finally {
+    nearAiMetadataDiagnosticRunning = false;
+  }
+}
+
 const isEntrypoint =
   typeof process.argv[1] === "string" &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isEntrypoint) {
+  const diagnosticEnabled =
+    process.env[DIAGNOSTIC_FLAG_ENV] === "1" ||
+    process.argv.includes(DIAGNOSTIC_FLAG_ARG);
+
   createApp()
     .then((app) => {
       const httpServer = app.listen(PORT, HOST, () => {
         console.log(
           `SentinelReview workbench listening on http://${HOST}:${PORT}`,
         );
+        if (diagnosticEnabled) {
+          void runOneTimeNearAiMetadataDiagnostic();
+        }
       });
 
       const shutdown = () => {
