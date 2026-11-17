@@ -135,7 +135,7 @@ export function NearAiPanel({
               2. <span className="text-slate-200">Optional NEAR AI transmission</span>: Authorizing this action transmits the full displayed snapshot from the AI Studio backend to the NEAR AI provider (where the model processes the source to propose hypotheses) only if API credentials, operator-approved deployment measurements, and TCB checks pass.
             </p>
             <p className="text-slate-400">
-              3. <span className="text-slate-200">Verification limits</span>: Cryptographic hashes and TEE attestation verify snapshot integrity and deployment identity; they do not imply source code is uninspected by the remote provider or replace human review.
+              3. <span className="text-slate-200">Verification limits</span>: Snapshot hashes verify source integrity. TEE attestation and approved deployment measurements are used to verify the inference environment. They do not imply source code is uninspected by the remote provider or replace human review.
             </p>
           </div>
 

@@ -100,10 +100,10 @@ export function EvidencePanel({
                   key={file.path}
                   className="flex flex-wrap items-baseline justify-between gap-2 text-xs"
                 >
-                  <span className="text-slate-200">
+                  <span className="min-w-0 break-all text-slate-200">
                     {file.path} ({file.lineCount} lines · {file.byteLength} B)
                   </span>
-                  <span className="break-all text-slate-400">
+                  <span className="min-w-0 break-all text-slate-400">
                     sha256: {file.sha256}
                   </span>
                 </li>
@@ -157,7 +157,7 @@ export function EvidencePanel({
                     }`}
                   >
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <span className="font-mono text-slate-300">
+                      <span className="min-w-0 break-all font-mono text-slate-300">
                         Finding: {link.findingId}
                       </span>
                       <span className={`font-medium ${computedColor(link.computedValidationStatus)}`}>
@@ -178,12 +178,12 @@ export function EvidencePanel({
                             evidenceId: link.evidenceId,
                           })
                         }
-                        className="inline-flex cursor-pointer items-center gap-1 font-mono text-teal-400 transition-colors hover:text-teal-300"
+                        className="inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 text-left font-mono text-teal-400 transition-colors hover:text-teal-300"
                       >
-                        <span className="tabular-nums">
+                        <span className="break-all tabular-nums">
                           Location: {link.path}:{link.startLine}-{link.endLine}
                         </span>
-                        <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+                        <ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       </button>
                       <span className="text-slate-400">Ref: {link.referenceStatus}</span>
                     </div>

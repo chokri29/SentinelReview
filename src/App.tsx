@@ -412,7 +412,7 @@ export default function App() {
             <PipelineOverviewPanel review={review} />
 
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-              <div className="space-y-6 lg:col-span-7">
+              <div className="min-w-0 space-y-6 lg:col-span-7">
                 <FindingsPanel
                   review={review}
                   activeHighlight={activeHighlight}
@@ -425,7 +425,7 @@ export default function App() {
                 />
               </div>
 
-              <div className="lg:col-span-5">
+              <div className="min-w-0 lg:col-span-5">
                 <div className="lg:sticky lg:top-24">
                   <SourceViewer
                     files={review.snapshotFiles}

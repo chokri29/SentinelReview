@@ -222,7 +222,7 @@ Meta hypotheses are displayed separately. They do not modify deterministic findi
 | `POST` | `/api/ai-review` | Optional NEAR AI hypothesis analysis | Same-origin checks, explicit consent header and single-use snapshot-bound token required |
 | `POST` | `/api/meta-review` | Optional Meta hypothesis analysis | Separate consent and token; server rejects custom/private source and permits bundled fixtures only |
 
-API responses use no-store behavior and security-related response headers. The frontend uses a guarded JSON response parser so HTML or malformed responses are surfaced as endpoint/status/content-type errors rather than misleading JSON parse failures.
+API responses use `Cache-Control: no-store` and `Cross-Origin-Resource-Policy: same-origin`. The server sets `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` response headers. The frontend uses a guarded JSON response parser so HTML or malformed responses are surfaced as endpoint/status/content-type errors rather than misleading JSON parse failures.
 
 ## Running locally
 
