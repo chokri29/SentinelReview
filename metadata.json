@@ -2,7 +2,5 @@
   "name": "SentinelReview",
   "description": "Deterministic NEAR Rust smart-contract security review workbench with cryptographic evidence verification and optional gated NEAR AI hypothesis analysis.",
   "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "majorCapabilities": []
 }
