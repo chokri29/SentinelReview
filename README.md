@@ -18,6 +18,12 @@
   <a href="https://nodejs.org/en/download/" title="Download Node.js">
     <img src="https://img.shields.io/badge/runtime-Node.js%2024+-339933?logo=node.js&logoColor=white" alt="Node.js 24 or newer">
   </a>
+
+<p align="center">
+  <a href="https://sentinel-near-review.ai.studio/">
+    <img src="https://img.shields.io/badge/try%20it%20live-open-9FE870?style=for-the-badge&logo=ultahost&logoColor=purple" alt="visit Wbsite">
+  </a>
+  
 </p>
 
 > **Scope:** SentinelReview is an experimental review workbench that supports security investigation and human review. It is not a complete security audit, an exploitability oracle, or a smart-contract safety certification.
